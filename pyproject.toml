@@ -1,0 +1,13 @@
+[project]
+name = "cook-mertz"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.11"
+dependencies = [
+    "sympy>=1.14.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]

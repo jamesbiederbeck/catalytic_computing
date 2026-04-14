@@ -1,0 +1,23 @@
+-- 01_hello_field.cmtz
+--
+-- The simplest meaningful Cook-Mertz program.
+-- Embeds two phase registers, sequences them, and reads both out.
+--
+-- Primitive root of F_17 is g=3, so:
+--   ω^4  = 3^4  mod 17 = 81  mod 17 = 13
+--   ω^8  = 3^8  mod 17 = 6561 mod 17 = 16   (= -1 mod 17: the "half-turn")
+--   ω^16 = 1                                 (Fermat: g^(p-1) ≡ 1)
+
+field(17, 19);           -- F_17, working field F_19 (smallest prime > 17)
+
+roots(17) as omega17;    -- build ω-table: {3^j mod 17 : j ∈ [16]}
+
+embed(0, 4);             -- register embed_0 ← ω^4 = 13
+embed(1, 8);             -- register embed_1 ← ω^8 = 16
+
+-- Sequence the two embeds so the cost model sees them as a single program.
+-- Lemma 2.1: t(f∘g) = 1×1 = 1, s = 1 + 1 = 2, r = max(1,1) = 1
+compose(embed_0, embed_1);
+
+measure(embed_0, mod_p) as phi4;    -- expect 13
+measure(embed_1, mod_p) as phi8;    -- expect 16  (= -1 mod 17)

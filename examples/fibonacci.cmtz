@@ -1,0 +1,40 @@
+-- fibonacci.cmtz
+--
+-- Compute the n-th Fibonacci number mod p via matrix exponentiation.
+--
+-- The standard Fibonacci matrix identity:
+--
+--   F^n · [1, 0]ᵀ = [F_{n+1}, F_n]ᵀ
+--
+-- where  F = [[1, 1],   and  F^n is computed by the matpow node.
+--             [1, 0]]
+--
+-- This program computes F_12 mod 17.
+--   F_12 = 144,  144 mod 17 = 8.
+--
+-- Theorem 1.2 cost for matpow(fib_matrix, 12, 0.5):
+--   δ = 2^(3/ε) = 2^6 = 64
+--   digits of 12 in base 64: [12]  (single digit, since 12 < 64)
+--   recursive_calls ≤ 12^0.5 × log₂(12) ≈ 12.7
+--   basic_instructions bound includes n^e^(1/ε) = n^e² ≈ n^7.4
+
+field(17, 19);
+
+-- fib_matrix is the DSL handle for the Fibonacci matrix [[1,1],[1,0]].
+-- roots(17) builds the ω-table; its register name is reused as the
+-- matrix identifier so matpow can resolve it in the IR.
+roots(17) as fib_matrix;
+
+-- Initial vector component: ω^0 = 1, corresponding to F_1 = 1 in
+-- the starting vector [F_1, F_0]ᵀ = [1, 0]ᵀ.
+embed(0, 0);
+
+-- Catalytic region: compute F^12 mod 17 using base-64 decomposition.
+-- Registers r0..r3 are provably restored on exit (§6.3 invariant).
+catalytic {
+    matpow(fib_matrix, 12, 0.5) as F12;
+} restoring (r0, r1, r2, r3);
+
+-- Read out the matrix power result.
+-- Actual F_12 is extracted from the result matrix by the runner.
+measure(F12, mod_p) as result;

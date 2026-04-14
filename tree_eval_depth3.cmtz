@@ -1,0 +1,67 @@
+-- Cook-Mertz v2: Depth-3 TreeEval via ω-interpolation
+--
+-- Evaluates a binary tree of depth 3 using catalytic matrix powering
+-- and root-of-unity cancellation over F_17.
+--
+-- Key invariants exercised:
+--   [Spec §2.2] Σ_{j∈[16]} ω^j ≡ 0 (mod 17) — root-of-unity cancellation
+--   [Spec §2.5] M^4 via base-δ decomposition, ε=0.5
+--   [Spec §2.6] Catalytic registers restored after each inner computation
+--   [Spec §2.7] Lemma 2.1 cost: t(f∘g) = t_f × t_g
+--
+-- Field: F_17, working field F_289 (= 17^2)
+-- Root order: m = p-1 = 16 (powers of 2 give clean quarter-turn phases)
+
+field(17, 293);  -- q=293 is the smallest prime ≥ 17^2=289
+
+-- ω-table: {g^j mod 17 : j ∈ [16]}, g = primitive root mod 17
+-- This is the v2 fix: primitive roots in F_p, NOT cyclotomic poly Φ_n(x)
+roots(17) as omega17;
+
+-- Embed four leaf nodes at evenly-spaced phases (4th roots in F_17)
+--   ω^0 = 1,  ω^4,  ω^8,  ω^12
+embed(0, 0);   -- leaf-0: ω^0 = 1           (register: embed_0)
+embed(1, 4);   -- leaf-1: ω^4               (register: embed_1)
+embed(2, 8);   -- leaf-2: ω^8               (register: embed_2)
+embed(3, 12);  -- leaf-3: ω^12              (register: embed_3)
+
+-- Rotate leaf-0 by j=8: conjugate pair for add/subtract catalytic pattern
+-- embed_0 · ω^8  →  root-of-unity cancellation with leaf-2 [Spec §6.3]
+rotate(embed_0, embed_2, 8);
+
+-- Rotate leaf-1 by j=4: positions it for left-subtree interpolation
+rotate(embed_1, embed_3, 4);
+
+-- Compose left-subtree path: leaf-0 rotated into leaf-1 rotated
+-- Lemma 2.1: t = 1×1 = 1, s = 1 + 1×1 = 2, r = max(1,1) = 1
+compose(rot_embed_0_embed_2, rot_embed_1_embed_3);
+
+-- Catalytic region A: evaluate left sub-tree (depth 2 → M^4)
+-- All work registers r0..r3 are provably restored on exit [Spec §6.3]
+catalytic {
+    matpow(omega17, 4, 0.5) as left_eval;
+} restoring (r0, r1, r2, r3);
+
+-- Embed two more leaves for the right subtree (depth-2 wing)
+embed(4, 2);   -- leaf-4: ω^2               (register: embed_4)
+embed(5, 6);   -- leaf-5: ω^6               (register: embed_5)
+
+-- Rotate for right-subtree interpolation basis
+rotate(embed_4, embed_5, 6);
+
+-- Compose right-subtree path
+compose(embed_4, rot_embed_4_embed_5);
+
+-- Catalytic region B: evaluate right sub-tree
+-- Independent catalytic region — registers restored again [Spec §2.6]
+catalytic {
+    matpow(omega17, 4, 0.5) as right_eval;
+} restoring (r0, r1, r2, r3);
+
+-- Compose the two evaluated subtrees at the tree root
+-- Final Lemma 2.1 cost: t = t_A × t_B, s = s_A + t_A × s_B
+compose(left_eval, right_eval);
+
+-- Read out root evaluation mod p
+-- Mode 'mod_p' (v2 addition): reduces result to F_p = Z/17Z
+measure(right_eval, mod_p) as tree_result;

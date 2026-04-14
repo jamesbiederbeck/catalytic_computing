@@ -1,0 +1,29 @@
+-- 02_rotate_fuse.cmtz
+--
+-- Rotation fusion: two consecutive ω-gates collapse into one.
+-- The optimizer's fuse_rotations pass detects that:
+--   rotate(src, _, j=5) followed by rotate(prev, _, j=3)
+-- can be replaced by a single rotate(src, _, j=8), saving one
+-- modular multiply.
+--
+-- Math: ω^5 · ω^3 = ω^(5+3) = ω^8 = 16 mod 17  (= -1 mod 17)
+-- After fusion: rotations_fused stat should be 1.
+
+field(17, 19);
+roots(17) as omega17;
+
+embed(0, 0);                             -- r0 ← ω^0 = 1
+
+-- First gate: multiply by ω^5
+-- creates register rot_embed_0_embed_1 = ω^5 = 14
+rotate(embed_0, embed_1, 5);
+
+-- Second gate: multiply by ω^3
+-- src = previous IRRotate node → fusion condition satisfied
+-- Before fusion: rot_rot_embed_0_embed_1_embed_2 = ω^8 = 16
+-- After  fusion: same register, but IRRotate.j patched from 3 → 8
+rotate(rot_embed_0_embed_1, embed_2, 3);
+
+-- Measure the doubly-rotated result.
+-- Value: ω^0 * ω^5 * ω^3 = ω^8 = 16 mod 17
+measure(rot_rot_embed_0_embed_1_embed_2, mod_p) as fused_result;
