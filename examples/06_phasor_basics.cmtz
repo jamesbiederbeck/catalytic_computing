@@ -1,0 +1,36 @@
+-- 06_phasor_basics.cmtz
+--
+-- v4 phasor network: complex F_{p²} arithmetic.
+--
+-- cfield(p) declares a complex extension field F_{p²} = F_p[i]/(i²-c),
+-- where c is the smallest quadratic non-residue mod p (auto-computed).
+--
+-- For p=7: g=3, c=3 (since 3^3=27≡-1 mod 7), q=53 (nextprime(48)).
+-- Root table (m = p-1 = 6):  ω^0=1  ω^1=3  ω^2=2  ω^3=6  ω^4=4  ω^5=5
+--
+-- DSL operations in F_{7²}:
+--
+--   cembed(re_psi, im_psi)  → register holds  ω^re_psi + i·ω^im_psi
+--   conj(z) as name         → a+bi  →  a-bi mod p
+--   magsq(z) as name        → a²-b²·c  mod p  (type-lowers F_{p²}→F_p)
+--   add(a, b) as name       → component-wise addition
+--
+-- Concrete values:
+--   cembed_1 = ω^0 + i·ω^0 = 1 + i       (1, 1)
+--   cembed_2 = ω^1 + i·ω^2 = 3 + 2i      (3, 2)
+--   conj_2   = 3 - 2i                    (3, 5)   (-2 ≡ 5 mod 7)
+--   magsq_2  = 3²-2²·3 = 9-12 = -3 ≡ 4  (mod 7)
+--   sum_12   = (1+3) + (1+2)i = 4 + 3i   (4, 3)
+
+cfield(7);              -- F_7,  c=3 (auto),  q=53 (auto)
+
+cembed(0, 0);           -- cembed_1 = 1 + 1i
+cembed(1, 2);           -- cembed_2 = 3 + 2i
+
+conj(cembed_2) as conj_2;            -- 3 + 5i  (-2 ≡ 5 mod 7)
+magsq(cembed_2) as magsq_2;          -- 4 mod 7
+
+add(cembed_1, cembed_2) as sum_12;   -- (4, 3) = 4 + 3i
+
+-- magsq type-lowers F_{7²} → F_7, so measure with mod_p
+measure(magsq_2, mod_p) as norm;     -- expect 4

@@ -1,0 +1,61 @@
+-- 11_diffie_hellman.cmtz
+--
+-- Toy Diffie-Hellman key exchange over F_17.
+--
+-- Alice and Bob agree on a generator g = ω^0 = 1 (the embedded value).
+-- Each picks a secret exponent and rotates:
+--
+-- Root table: g=3 generates F_17.
+--   ω^5 = 5,  ω^11 = 7,  ω^16 = ω^0 = 1.
+--
+--   Alice: a = 5   →  g · ω^5 = 1 · 5 = 5
+--   Bob:   b = 11  →  g · ω^11 = 1 · 7 = 7
+--
+-- They exchange public values and rotate again:
+--
+--   Alice computes Bob's public value rotated by her secret:
+--     7 · ω^5 = 7 · 5 = 35 mod 17 = 1  (shared secret)
+--
+--   Bob computes Alice's public value rotated by his secret:
+--     5 · ω^11 = 5 · 7 = 35 mod 17 = 1  (shared secret)
+--
+-- Both arrive at ω^(a+b) = ω^16 = 1.  The shared secret is the same
+-- because rotation is commutative: ω^a · ω^b = ω^b · ω^a.
+--
+-- (In real DH the operation is exponentiation g^a, not multiplication
+-- g·ω^a — this is a toy analogue showing the commutativity that makes
+-- the protocol work.)
+
+field(17, 19);
+roots(17) as omega;
+
+-- Generator: g = ω^0 = 1
+embed(0, 0);
+
+-- ── Alice's computation ──────────────────────────────────────────
+
+-- Alice's secret: a = 5
+-- Public value: g · ω^5 = 1 · 5 = 5
+rotate(embed_0, alice_pub, 5);
+measure(rot_embed_0_alice_pub, mod_p) as alice_public;   -- expect 5
+
+-- ── Bob's computation ────────────────────────────────────────────
+
+-- Bob's secret: b = 11
+-- Public value: g · ω^11 = ω^11 = 7
+rotate(embed_0, bob_pub, 11);
+measure(rot_embed_0_bob_pub, mod_p) as bob_public;      -- expect 7
+
+-- ── Key agreement ────────────────────────────────────────────────
+
+-- Alice takes Bob's public (ω^11) and rotates by her secret (5):
+-- ω^11 · ω^5 = ω^16 = 1
+rotate(rot_embed_0_bob_pub, alice_shared, 5);
+measure(rot_rot_embed_0_bob_pub_alice_shared, mod_p) as alice_key;  -- expect 1
+
+-- Bob takes Alice's public (ω^5) and rotates by his secret (11):
+-- ω^5 · ω^11 = ω^16 = 1
+rotate(rot_embed_0_alice_pub, bob_shared, 11);
+measure(rot_rot_embed_0_alice_pub_bob_shared, mod_p) as bob_key;    -- expect 1
+
+-- alice_key == bob_key == 1  (shared secret)

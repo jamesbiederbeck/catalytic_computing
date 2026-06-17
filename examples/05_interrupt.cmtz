@@ -1,0 +1,40 @@
+-- 05_interrupt.cmtz
+--
+-- Strict catalytic region: interrupt { body } restoring (regs)
+--
+-- Contrast with catalytic { } restoring () from 03_conjugate_catalytic.cmtz:
+--
+--   catalytic { }  → lowers to IRRegion  (ADVISORY — no enforcement)
+--                     Used for main-process workspace management.
+--                     The compiler trusts the programmer's restoration claim.
+--
+--   interrupt { }  → lowers to IRCatalyticRegion  (STRICT — verified)
+--                     Used for interrupt handlers that borrow running registers.
+--                     The verifier checks that listed registers are not clobbered
+--                     by any node inside the body (§2.7 invariant).
+--
+-- This example protects embed_1 (= ω^6 = 15) across an interrupt that
+-- computes a rotation in its own temporary registers.  embed_1 is never
+-- touched inside the body, so the strict check passes.
+--
+-- Field: F_17  (m = p-1 = 16, g = 3)
+--   ω^0 = 1    ω^3 = 10    ω^6 = 15    ω^8 = 16
+
+field(17, 19);
+roots(17) as omega17;
+
+-- Main workspace
+embed(0, 0);        -- embed_0 = ω^0 = 1  (freely modifiable)
+embed(1, 6);        -- embed_1 = ω^6 = 15 (guard — must survive the handler)
+
+-- Interrupt handler: borrows context to compute a temporary result.
+-- Operates only on embed_2 and its rotation; never touches embed_1.
+interrupt {
+    embed(2, 3);                           -- temp = ω^3 = 10
+    rotate(embed_2, embed_2, 5);           -- rot_embed_2_embed_2 = ω^8 = 16
+} restoring (embed_1);
+
+-- embed_1 must be unchanged: strict verifier enforces this.
+measure(embed_1,               mod_p) as guard_val;   -- expect 15
+measure(embed_0,               mod_p) as workspace;   -- expect  1
+measure(rot_embed_2_embed_2,   mod_p) as handler_out; -- expect 16

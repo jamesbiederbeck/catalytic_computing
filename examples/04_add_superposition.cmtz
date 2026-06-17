@@ -1,0 +1,35 @@
+-- 04_add_superposition.cmtz
+--
+-- Additive superposition gate (v4).
+-- add(a, b) computes (a + b) mod p — the result lands on some element
+-- of F_p, which is itself a root of unity since F_p* is cyclic.
+--
+-- Math (F_17, g=3):
+--   embed_0 = ω^0 = 1
+--   embed_1 = ω^4 = 13
+--   superposed = (1 + 13) mod 17 = 14 = ω^9
+--
+-- After rotation by ω^3 = 10:
+--   rot_superposed_rotated = 14 · 10 mod 17 = 140 mod 17 = 4 = ω^12
+--
+-- Key insight: unlike rotate (which stays on the root-of-unity torus),
+-- add can produce values that are NOT consecutive powers of g; here
+-- j=0 + j=4 → j=9, a non-trivial "jump" in exponent space.
+
+field(17, 19);
+roots(17) as omega17;
+
+embed(0, 0);            -- embed_0 = ω^0 = 1
+embed(1, 4);            -- embed_1 = ω^4 = 13
+
+-- Superpose: (1 + 13) mod 17 = 14 = ω^9
+add(embed_0, embed_1) as superposed;
+
+-- Rotate the superposition by ω^3 = 10:
+-- 14 · 10 = 140 ≡ 4 mod 17 = ω^12
+rotate(superposed, rotated, 3);
+
+measure(embed_0,               mod_p) as phi0;         -- expect  1
+measure(embed_1,               mod_p) as phi4;         -- expect 13
+measure(superposed,            mod_p) as sum14;        -- expect 14
+measure(rot_superposed_rotated, mod_p) as sum_rotated;  -- expect  4

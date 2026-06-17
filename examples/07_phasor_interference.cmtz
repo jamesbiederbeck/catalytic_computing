@@ -1,0 +1,46 @@
+-- 07_phasor_interference.cmtz
+--
+-- Two-phasor interference in F_{7²}.
+--
+-- Two signals are embedded as complex elements of F_{p²} = F_7[i]/(i²-c)
+-- where c = find_nonresidue(7) = 3.  Primitive root g = 3 in F_7, so:
+--
+--   Signal A = ω^0 + i·ω^1 = 1 + 3i
+--   Signal B = ω^2 + i·ω^0 = 2 + 1i
+--
+-- Superposition:  A + B = (1+2, 3+1) = (3, 4) mod 7
+-- Conjugate of A: conj(A) = (1, -3) = (1, 4) mod 7
+--
+-- Power of the sum:
+--   |A+B|² = a² - b²·c mod p
+--          = 3² - 4²·3 mod 7
+--          = 9 - 48 mod 7
+--          = 9 - 48 = -39 ≡ 3 mod 7
+--
+-- This is destructive interference: the combined power (3) is less
+-- than the sum of individual powers would be in ordinary arithmetic,
+-- because the cross-term phases partially cancel in F_{p²}.
+
+cfield(7);
+
+-- Two phasor sources at different phase angles
+cembed(0, 1);       -- cembed_1: A = ω^0 + i·ω^1 = (1, 3)
+cembed(2, 0);       -- cembed_2: B = ω^2 + i·ω^0 = (2, 1)
+
+-- Superposition: vector sum in F_{7²}
+add(cembed_1, cembed_2) as sum_AB;      -- (3, 4)
+
+-- Conjugate of the first signal
+conj(cembed_1) as A_bar;               -- (1, 4)
+
+-- Power of the superposition: type-lowers F_{7²} → F_7
+magsq(sum_AB) as power;                -- 3² - 4²·3 = 3 mod 7
+
+-- Also measure individual power for comparison
+magsq(cembed_1) as power_A;            -- 1² - 3²·3 = 1 - 27 = -26 ≡ 2 mod 7
+magsq(cembed_2) as power_B;            -- 2² - 1²·3 = 4 - 3 = 1 mod 7
+
+-- Read out the scalar results (now in F_7, not F_{7²})
+measure(power, mod_p) as combined;      -- expect 3
+measure(power_A, mod_p) as solo_A;      -- expect 2
+measure(power_B, mod_p) as solo_B;      -- expect 1

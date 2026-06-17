@@ -1,0 +1,46 @@
+-- 12_cost_chain.cmtz
+--
+-- Lemma 2.1 cost propagation through a compose pipeline.
+--
+-- The compiler tracks three cost metrics through every node:
+--   t(f) = recursive_calls   (multiplicative under composition)
+--   s(f) = basic_instructions (additive with fan-out)
+--   r(f) = num_registers      (max under composition)
+--
+-- Lemma 2.1 composition rule:
+--   t(f ∘ g) = t(f) · t(g)
+--   s(f ∘ g) = s(f) + t(f) · s(g)
+--   r(f ∘ g) = max(r(f), r(g))
+--
+-- This program composes three stages and then attaches a matpow node
+-- so the compiler can check Theorem 1.2 bounds against the accumulated
+-- cost.  The interesting output is the analysis report, not the numeric
+-- value — the compiler proves the cost is bounded before running.
+--
+-- Stage pipeline:
+--   embed_0 → rotate → compose(embed_0, rot) → matpow
+
+field(17, 19);
+
+-- Build the root table (also serves as the matpow matrix handle)
+roots(17) as basis;
+
+-- Stage 1: embed a seed
+embed(0, 0);
+
+-- Stage 2: rotate to create a second register
+rotate(embed_0, step1, 3);
+
+-- Stage 3: compose the two stages
+-- Lemma 2.1 fires here, accumulating cost
+compose(embed_0, rot_embed_0_step1);
+
+-- Stage 4: matpow with Theorem 1.2 bound check
+-- d=8, epsilon=0.5  →  delta = 2^(3/0.5) = 64
+-- digits of 8 in base 64 = [8] (single digit)
+-- cost_bound.recursive_calls ≤ 8^0.5 · log₂(8) ≈ 8.49
+catalytic {
+    matpow(basis, 8, 0.5) as power;
+} restoring (r0, r1);
+
+measure(power, mod_p) as result;

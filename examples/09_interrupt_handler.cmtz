@@ -1,0 +1,52 @@
+-- 09_interrupt_handler.cmtz
+--
+-- Verified interrupt handler with catalytic register restoration.
+--
+-- Scenario: a main computation is running when an interrupt fires.
+-- The handler must compute something useful (a phasor power measurement)
+-- using workspace registers, then provably restore them to their pre-
+-- interrupt values so the main computation can resume safely.
+--
+-- This is the feature with no analogue in other languages: the compiler
+-- statically verifies that the listed registers are not clobbered.
+--
+-- Architecture:
+--   Main:  embed_0 = ω^5 (some ongoing computation state)
+--   IRQ:   cembed two phasors, superpose, measure power
+--          must not destroy embed_0
+--
+-- `interrupt { } restoring (...)` is the strict variant — the catalytic
+-- verifier proves the listed registers come back clean.  If any inner
+-- node clobbers a listed register, compilation fails.
+
+field(17, 19);
+roots(17) as omega;
+
+-- ── Main computation state (must survive the interrupt) ──────────
+
+embed(0, 5);                -- embed_0 = ω^5 = 14  (caller's register)
+
+-- ── Interrupt handler: compute phasor power without clobbering ───
+
+interrupt {
+    -- Handler does its own work using fresh registers.
+    -- embed_0 is listed as restoring — the verifier will reject
+    -- any inner node that writes to embed_0.
+    embed(1, 0);            -- embed_1 = ω^0 = 1  (handler workspace)
+    embed(2, 3);            -- embed_2 = ω^3 = 10 (handler workspace)
+
+    -- Superpose handler signals
+    add(embed_1, embed_2) as irq_sum;   -- 1 + 10 = 11
+
+    -- Measure a result from the handler
+    measure(irq_sum, mod_p) as irq_result;  -- 11
+} restoring (embed_0);
+
+-- ── Main computation continues: embed_0 is still ω^5 ────────────
+
+rotate(embed_0, embed_0, 3);                -- ω^5 · ω^3 = ω^8 = 16
+measure(rot_embed_0_embed_0, mod_p) as main_result;    -- expect 16
+
+-- Both results are valid:
+--   irq_result  = 11  (handler's work)
+--   main_result = 16  (main thread, embed_0 was preserved)

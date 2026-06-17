@@ -1,0 +1,52 @@
+-- 08_ntt_butterfly.cmtz
+--
+-- One radix-2 NTT butterfly step over F_17.
+--
+-- The Number-Theoretic Transform butterfly is:
+--   (a, b)  →  (a + ω^k · b,  a - ω^k · b)
+--
+-- This is the core operation in NTT-based polynomial multiplication,
+-- used in post-quantum cryptography (Kyber/Dilithium) and ZK-SNARK
+-- proof systems.  All arithmetic is exact — no floating point.
+--
+-- Root table: g=3 is a primitive root of F_17.
+--   ω^0=1, ω^1=3, ω^2=9, ω^3=10, ω^4=13, ω^5=5, ...
+--   ω^8=16 (=-1), ω^15=6.
+--
+-- Here:
+--   a = ω^0 = 1            (embed_0)
+--   b = ω^3 = 10           (embed_1)
+--   twiddle k = 4, so ω^4 = 13
+--
+--   ω^k · b = rotate(b, k) = 10 · 13 = 130 mod 17 = 11
+--
+--   wing_plus  = a + ω^k·b = 1 + 11 = 12 mod 17
+--   wing_minus = a - ω^k·b = 1 - 11 = -10 ≡ 7 mod 17
+--
+-- Subtraction: since ω^(m/2) = ω^8 = -1 mod 17, we compute -x as
+-- rotate(x, 8), i.e. multiply by ω^8 = 16 ≡ -1.
+--
+--   -(ω^k·b) = 11 · 16 = 176 mod 17 = 6
+--   wing_minus = 1 + 6 = 7 mod 17  ✓
+
+field(17, 19);
+roots(17) as omega;
+
+-- Input pair
+embed(0, 0);            -- a = ω^0 = 1
+embed(1, 3);            -- b = ω^3 = 10
+
+-- Twiddle: multiply b by ω^4
+rotate(embed_1, twiddle_b, 4);          -- ω^3 · ω^4 = ω^7 = 12
+
+-- Plus wing: a + ω^k · b
+add(embed_0, rot_embed_1_twiddle_b) as wing_plus;    -- 1 + 11 = 12
+
+-- Negate twiddle via half-turn: multiply by ω^8 = -1 mod 17
+rotate(rot_embed_1_twiddle_b, neg_tw, 8);   -- 11 · 16 = 6
+
+-- Minus wing: a + (-ω^k · b) = a - ω^k · b
+add(embed_0, rot_rot_embed_1_twiddle_b_neg_tw) as wing_minus;   -- 1 + 6 = 7
+
+measure(wing_plus, mod_p) as out_plus;       -- expect 12
+measure(wing_minus, mod_p) as out_minus;     -- expect 7
