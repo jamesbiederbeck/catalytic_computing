@@ -1,9 +1,15 @@
-"""IR node definitions for Cook-Mertz v2.
+"""IR node definitions for Cook-Mertz v4.
 
 Every IR node carries:
   - field: IRField (arithmetic context, never None after elaboration)
   - Cost model fields (Lemma 2.1): recursive_calls, basic_instructions, num_registers
   - Catalytic annotation: is_catalytic flag
+
+v4 additions (phasor network support):
+  - IRAdd: additive superposition gate
+  - IRComplexEmbed: initialize a complex F_{p²} register
+  - IRConjugate: complex conjugate
+  - IRMagnitudeSq: |z|² → F_p  (type-lowers from F_{p²})
 
 v1 bugs fixed:
   - IRRotate.theta: float → IRRotate.j: int  (stay in modular arithmetic)
@@ -173,13 +179,25 @@ class IRMatPow(IRNode):
 
 
 @dataclass
-class IRCatalyticRegion(IRNode):
-    """Wraps a subgraph that must satisfy the clean-program invariant
-    (Definition 2.5, Alekseev et al.).
+class IRRegion(IRNode):
+    """Advisory region — main-process use, no verification (§2.6).
 
-    The catalytic verifier (analysis/catalytic_verify.py) checks that
-    all registers in catalytic_regs are provably restored after the
-    inner computation completes. Without this, composition is unsafe.
+    The main process owns its registers and may compute any
+    roots-of-unity program over them. The catalytic_regs list
+    documents intended workspace but carries no enforcement.
+    Produced by the `catalytic {}` DSL keyword.
+    """
+    inner_nodes: list[IRNode] = field(default_factory=list)
+    catalytic_regs: list[str] = field(default_factory=list)
+
+
+@dataclass
+class IRCatalyticRegion(IRNode):
+    """Strict catalytic region — interrupt handler use, verified (§2.7).
+
+    Represents a handler that borrows registers from a running
+    computation. The verifier enforces that no inner node clobbers
+    any register listed in catalytic_regs. Produced by `interrupt {}`.
     """
     inner_nodes: list[IRNode] = field(default_factory=list)
     catalytic_regs: list[str] = field(default_factory=list)
@@ -212,6 +230,64 @@ class IRCycloPhiPoly(IRNode):
     Renamed to avoid confusion."""
     n: int = 0
     poly_coeffs: list[int] = field(default_factory=list)
+
+
+# ── v4: Phasor network primitives ────────────────────────────────────────────
+
+@dataclass
+class IRAdd(IRNode):
+    """Additive superposition gate: compute (a + b) mod p.
+
+    For real fields (F_p): result = (a + b) % p
+    For complex fields (F_{p²}): result = add_Fp2(a, b)
+    Both parents must share the same IRField.
+    """
+
+    def __post_init__(self):
+        self.basic_instructions = 1
+        self.num_registers = 1
+
+
+@dataclass
+class IRComplexEmbed(IRNode):
+    """Initialize a complex register with ω^re_psi + i·ω^im_psi in F_{p²}.
+
+    Requires ir_field.is_complex == True.
+    Name defaults to cembed_N in the lowerer.
+    """
+    re_psi: int = 0
+    im_psi: int = 0
+
+    def __post_init__(self):
+        self.basic_instructions = 1
+        self.num_registers = 1
+
+
+@dataclass
+class IRConjugate(IRNode):
+    """Complex conjugate: a+bi → a-bi mod p.
+
+    Requires ir_field.is_complex == True.
+    Input (single parent) must also be in a complex field.
+    """
+
+    def __post_init__(self):
+        self.basic_instructions = 1
+        self.num_registers = 1
+
+
+@dataclass
+class IRMagnitudeSq(IRNode):
+    """Magnitude squared: |a+bi|² = a² - b²·c mod p.
+
+    Type-lowers from F_{p²} to F_p.
+    Input ir_field must be complex; the output node's ir_field
+    should be set to ir_field.real_field() by the lowerer.
+    """
+
+    def __post_init__(self):
+        self.basic_instructions = 3   # two squares + one add + mod p
+        self.num_registers = 2
 
 
 # ── IR Program container ─────────────────────────────────────────────────────

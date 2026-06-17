@@ -27,8 +27,8 @@ from typing import Optional
 
 from ..ir_nodes import (
     IRProgram, IRNode, IREmbed, IRPrimitiveRoots, IRRotate,
-    IRPoly, IRMatPow, IRMeasure, IRCompose, IRCatalyticRegion,
-    IRCycloPhiPoly,
+    IRPoly, IRMatPow, IRMeasure, IRCompose, IRRegion, IRCatalyticRegion,
+    IRCycloPhiPoly, IRAdd, IRComplexEmbed, IRConjugate, IRMagnitudeSq,
 )
 from ..field import IRField, primitive_roots_Fp
 
@@ -201,6 +201,32 @@ class GLSLEmitter:
         self.emit("    return (a + b) % P;")
         self.emit("}")
         self.emit("")
+        # F_{p²} helpers (uvec2 = (re, im))
+        if self.field.is_complex:
+            c = self.field.c
+            self.emit(f"const uint C = {c}u;  // non-residue for F_{{p^2}}")
+            self.emit("")
+            self.emit("uvec2 add_fp2(uvec2 a, uvec2 b) {")
+            self.emit("    return uvec2((a.x + b.x) % P, (a.y + b.y) % P);")
+            self.emit("}")
+            self.emit("")
+            self.emit("uvec2 mul_fp2(uvec2 a, uvec2 b) {")
+            self.emit("    uint re = (mul_mod_p(a.x, b.x) + mul_mod_p(mul_mod_p(a.y, b.y), C)) % P;")
+            self.emit("    uint im = (mul_mod_p(a.x, b.y) + mul_mod_p(a.y, b.x)) % P;")
+            self.emit("    return uvec2(re, im);")
+            self.emit("}")
+            self.emit("")
+            self.emit("uvec2 conj_fp2(uvec2 a) {")
+            self.emit("    return uvec2(a.x, (P - a.y) % P);")
+            self.emit("}")
+            self.emit("")
+            self.emit("uint magsq_fp2(uvec2 a) {")
+            self.emit("    // |a+bi|² = a² - b²·c mod p")
+            self.emit("    uint re2 = mul_mod_p(a.x, a.x);")
+            self.emit("    uint im2c = mul_mod_p(mul_mod_p(a.y, a.y), C);")
+            self.emit("    return (re2 + P - im2c) % P;")
+            self.emit("}")
+            self.emit("")
 
     # ── Per-node code generation ─────────────────────────────────────
 
@@ -217,13 +243,24 @@ class GLSLEmitter:
             self._emit_measure(name, node)
         elif isinstance(node, IRCompose):
             self._emit_compose(name, node)
+        elif isinstance(node, IRRegion):
+            self.emit(f"// advisory region '{name}' "
+                      f"(restore: {node.catalytic_regs})")
         elif isinstance(node, IRCatalyticRegion):
-            self.emit(f"// catalytic region '{name}' "
+            self.emit(f"// interrupt handler '{name}' "
                       f"(restore: {node.catalytic_regs})")
         elif isinstance(node, IRCycloPhiPoly):
             self._emit_cyclo_phi(name, node)
         elif isinstance(node, IRMatPow):
             self._emit_matpow_stub(name, node)
+        elif isinstance(node, IRAdd):
+            self._emit_add(name, node)
+        elif isinstance(node, IRComplexEmbed):
+            self._emit_complex_embed(name, node)
+        elif isinstance(node, IRConjugate):
+            self._emit_conjugate(name, node)
+        elif isinstance(node, IRMagnitudeSq):
+            self._emit_magsq(name, node)
 
     def _emit_embed(self, name: str, node: IREmbed) -> None:
         var = self.fresh_var("emb")
@@ -332,6 +369,37 @@ class GLSLEmitter:
                   f"+ matmul (dispatch)")
         var = self.fresh_var("matpow")
         self.emit(f"uint {var} = 0u;  // placeholder — see dispatch code")
+        self._var_map[name] = var
+
+    def _emit_add(self, name: str, node: IRAdd) -> None:
+        a_var = self._resolve_parent(node, 0)
+        b_var = self._resolve_parent(node, 1)
+        if self.field.is_complex:
+            var = self.fresh_var("add")
+            self.emit(f"uvec2 {var} = add_fp2({a_var}, {b_var});")
+        else:
+            var = self.fresh_var("add")
+            self.emit(f"uint {var} = add_mod_p({a_var}, {b_var});")
+        self._var_map[name] = var
+
+    def _emit_complex_embed(self, name: str, node: IRComplexEmbed) -> None:
+        var = self.fresh_var("cemb")
+        re_j = node.re_psi % self.m
+        im_j = node.im_psi % self.m
+        self.emit(f"uvec2 {var} = uvec2(omega[{re_j}], omega[{im_j}]);  "
+                  f"// cembed({node.re_psi}, {node.im_psi})")
+        self._var_map[name] = var
+
+    def _emit_conjugate(self, name: str, node: IRConjugate) -> None:
+        src_var = self._resolve_parent(node, 0)
+        var = self.fresh_var("conj")
+        self.emit(f"uvec2 {var} = conj_fp2({src_var});")
+        self._var_map[name] = var
+
+    def _emit_magsq(self, name: str, node: IRMagnitudeSq) -> None:
+        src_var = self._resolve_parent(node, 0)
+        var = self.fresh_var("msq")
+        self.emit(f"uint {var} = magsq_fp2({src_var});  // |z|² → F_p")
         self._var_map[name] = var
 
     # ── Helpers ──────────────────────────────────────────────────────

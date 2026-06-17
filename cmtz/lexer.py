@@ -32,8 +32,10 @@ TOKEN_SPEC: list[tuple[str, str]] = [
     ('MODE',        r'\b(?:real|imag|mag|trace|mod_p)\b'),
 
     # Keywords — MUST be before ID
+    ('KW_CFIELD',   r'\bcfield\b'),
     ('KW_FIELD',    r'\bfield\b'),
     ('KW_EMBED',    r'\bembed\b'),
+    ('KW_CEMBED',   r'\bcembed\b'),
     ('KW_ROTATE',   r'\brotate\b'),
     ('KW_COMPOSE',  r'\bcompose\b'),
     ('KW_MEASURE',  r'\bmeasure\b'),
@@ -41,8 +43,12 @@ TOKEN_SPEC: list[tuple[str, str]] = [
     ('KW_CYCLO_PHI', r'\bcyclo_phi\b'),
     ('KW_MATPOW',   r'\bmatpow\b'),
     ('KW_CATALYTIC', r'\bcatalytic\b'),
+    ('KW_INTERRUPT', r'\binterrupt\b'),
     ('KW_RESTORING', r'\brestoring\b'),
     ('KW_AS',       r'\bas\b'),
+    ('KW_ADD',      r'\badd\b'),
+    ('KW_CONJ',     r'\bconj\b'),
+    ('KW_MAGSQ',    r'\bmagsq\b'),
 
     # Identifiers (after keywords and modes)
     ('ID',          r'[A-Za-z_][A-Za-z0-9_]*'),

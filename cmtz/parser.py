@@ -16,9 +16,9 @@ from __future__ import annotations
 
 from .lexer import Token, LexError
 from .ast_nodes import (
-    Program, FieldDecl, EmbedStmt, RotateStmt, ComposeStmt,
-    RootsStmt, CycloPhiStmt, MatPowStmt, CatalyticStmt,
-    MeasureStmt, ASTNode,
+    Program, FieldDecl, CFieldDecl, EmbedStmt, RotateStmt, ComposeStmt,
+    RootsStmt, CycloPhiStmt, MatPowStmt, CatalyticStmt, InterruptStmt,
+    MeasureStmt, AddStmt, CEmbedStmt, ConjStmt, MagSqStmt, ASTNode,
 )
 
 
@@ -86,6 +86,8 @@ class Parser:
         field_decl = None
         if self.at_keyword('field'):
             field_decl = self._parse_field_decl()
+        elif self.at_keyword('cfield'):
+            field_decl = self._parse_cfield_decl()
 
         stmts = []
         while not self.at('EOF'):
@@ -112,6 +114,18 @@ class Parser:
         self.expect('SEMI')
         return FieldDecl(p=p, q=q, line=tok.line, col=tok.col)
 
+    def _parse_cfield_decl(self) -> CFieldDecl:
+        tok = self.advance()  # consume 'cfield'
+        self.expect('LPAREN')
+        p = self.expect_int()
+        q = None
+        if self.at('COMMA'):
+            self.advance()
+            q = self.expect_int()
+        self.expect('RPAREN')
+        self.expect('SEMI')
+        return CFieldDecl(p=p, q=q, line=tok.line, col=tok.col)
+
     # ── Statement dispatch ───────────────────────────────────────────────
 
     def _parse_statement(self) -> ASTNode:
@@ -125,6 +139,11 @@ class Parser:
             'KW_CYCLO_PHI': self._parse_cyclo_phi,
             'KW_MATPOW': self._parse_matpow,
             'KW_CATALYTIC': self._parse_catalytic,
+            'KW_INTERRUPT': self._parse_interrupt,
+            'KW_ADD': self._parse_add,
+            'KW_CEMBED': self._parse_cembed,
+            'KW_CONJ': self._parse_conj,
+            'KW_MAGSQ': self._parse_magsq,
         }
         handler = dispatch.get(tok.type)
         if handler is None:
@@ -221,6 +240,67 @@ class Parser:
         return CatalyticStmt(
             body=body, restoring=regs, line=tok.line, col=tok.col,
         )
+
+    def _parse_interrupt(self) -> InterruptStmt:
+        tok = self.advance()  # 'interrupt'
+        self.expect('LBRACE')
+        body = []
+        while not self.at('RBRACE'):
+            body.append(self._parse_statement())
+        self.expect('RBRACE')
+        self.expect('KW_RESTORING')
+        self.expect('LPAREN')
+        regs = [self.expect_id()]
+        while self.at('COMMA'):
+            self.advance()
+            regs.append(self.expect_id())
+        self.expect('RPAREN')
+        self.expect('SEMI')
+        return InterruptStmt(
+            body=body, restoring=regs, line=tok.line, col=tok.col,
+        )
+
+    def _parse_add(self) -> AddStmt:
+        tok = self.advance()  # 'add'
+        self.expect('LPAREN')
+        a = self.expect_id()
+        self.expect('COMMA')
+        b = self.expect_id()
+        self.expect('RPAREN')
+        self.expect('KW_AS')
+        name = self.expect_id()
+        self.expect('SEMI')
+        return AddStmt(a=a, b=b, name=name, line=tok.line, col=tok.col)
+
+    def _parse_cembed(self) -> CEmbedStmt:
+        tok = self.advance()  # 'cembed'
+        self.expect('LPAREN')
+        re_psi = self.expect_int()
+        self.expect('COMMA')
+        im_psi = self.expect_int()
+        self.expect('RPAREN')
+        self.expect('SEMI')
+        return CEmbedStmt(re_psi=re_psi, im_psi=im_psi, line=tok.line, col=tok.col)
+
+    def _parse_conj(self) -> ConjStmt:
+        tok = self.advance()  # 'conj'
+        self.expect('LPAREN')
+        src = self.expect_id()
+        self.expect('RPAREN')
+        self.expect('KW_AS')
+        name = self.expect_id()
+        self.expect('SEMI')
+        return ConjStmt(src=src, name=name, line=tok.line, col=tok.col)
+
+    def _parse_magsq(self) -> MagSqStmt:
+        tok = self.advance()  # 'magsq'
+        self.expect('LPAREN')
+        src = self.expect_id()
+        self.expect('RPAREN')
+        self.expect('KW_AS')
+        name = self.expect_id()
+        self.expect('SEMI')
+        return MagSqStmt(src=src, name=name, line=tok.line, col=tok.col)
 
     def _parse_measure(self) -> MeasureStmt:
         tok = self.advance()  # 'measure'

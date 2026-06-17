@@ -18,7 +18,7 @@ from .lexer import tokenize
 from .parser import Parser
 from .elaborator import Elaborator
 from .lowering import lower
-from .ir_nodes import IRProgram
+from .ir_nodes import IRProgram, IRRegion, IRCatalyticRegion
 from .analysis import (
     check_cycles,
     check_field_consistency,
@@ -117,6 +117,10 @@ def compile_program(
         result.errors.append(f"Field consistency: {e}")
         result.analysis_report['field_consistent'] = False
 
+    # Count advisory regions (IRRegion / catalytic {}) — not verified
+    advisory = [n for _, n in ir_prog.nodes() if isinstance(n, IRRegion)]
+    result.analysis_report['catalytic_advisory_count'] = len(advisory)
+
     try:
         deltas = verify_catalytic(ir_prog)
         result.analysis_report['catalytic_verified'] = True
@@ -190,6 +194,22 @@ def compile_program(
                 ],
                 'workgroup_size': list(bundle.workgroup_size),
                 'spirv_command': bundle.spirv_compile_command(),
+            }
+
+        elif backend == 'wasm':
+            from .backends.wasm_backend import emit_wasm
+            bundle = emit_wasm(ir_prog)
+            result.backend_output = {
+                'wat_source': bundle.wat_source,
+                'root_table': bundle.root_table,
+                'layout': {
+                    'root_table_offset': bundle.layout.root_table_offset,
+                    'root_table_bytes': bundle.layout.root_table_bytes,
+                    'output_offset': bundle.layout.output_offset,
+                    'measure_count': bundle.layout.measure_count,
+                    'total_bytes': bundle.layout.total_bytes,
+                },
+                'assemble_command': bundle.assemble_command(),
             }
 
         else:

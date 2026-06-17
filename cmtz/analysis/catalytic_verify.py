@@ -1,27 +1,27 @@
-"""Catalytic restore verifier for Cook-Mertz v2.
+"""Catalytic restore verifier for Cook-Mertz v3.
 
-The catalytic invariant (Defn 2.5 "clean register program") is the
-entire correctness argument for the model. Without it, composition
-via Lemma 2.1 is unsafe — the composed program may silently corrupt
-registers that downstream stages depend on.
+Only IRCatalyticRegion nodes (produced by `interrupt {}`) are verified.
+IRRegion nodes (produced by `catalytic {}`) are advisory and skipped.
 
-The verifier tracks symbolic register deltas through each
-IRCatalyticRegion and checks that all catalytic registers have
-net-zero effect.
+An interrupt handler borrows registers from a running main-process
+computation. The main process resumes after the handler returns and
+depends on those registers being intact. The verifier statically proves
+this holds before any execution occurs.
 
-For the register programs produced by Lemma 3.1–3.5, the pattern is:
-  R ← R + X_u   (add subtree value)
-  ...computation...
-  R ← R − X_u   (subtract to restore)
-
-This verifier checks that such add/subtract pairs cancel.
+Current checks (§6.3):
+  - IREmbed clobber: if any inner node is an IREmbed whose output name
+    matches a listed catalytic register, that is a definite violation —
+    embed unconditionally overwrites the register.
+  - IRRotate: treated as net-zero (part of the m-fold ω-loop; root-of-
+    unity cancellation guarantees restoration after m iterations).
+  - IRCompose: safe when both sub-programs are individually clean.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from ..ir_nodes import (
-    IRProgram, IRNode, IRCatalyticRegion, IREmbed, IRRotate,
+    IRProgram, IRNode, IRRegion, IRCatalyticRegion, IREmbed, IRRotate,
     IRCompose, IRMeasure, IRPoly, IRMatPow,
 )
 
@@ -47,58 +47,56 @@ class RegDelta:
 
 
 def _trace_deltas(nodes: list[IRNode], catalytic_regs: list[str]) -> list[RegDelta]:
-    """Trace symbolic register deltas through a list of IR nodes.
+    """Trace symbolic register deltas for a strict (interrupt) region.
 
-    For each catalytic register, track additions and subtractions.
-    The Cook-Mertz pattern guarantees that for each loop iteration i:
-      - ω^i multiplication is applied (rotate)
-      - subtree values are added
-      - F_u is applied and accumulated into τ_out
-      - subtree values are subtracted (restore)
-      - The m iterations sum to the correct polynomial via root-of-unity cancellation
+    Checks each inner node against the listed catalytic registers and
+    accumulates a delta expression. A non-zero delta is a violation.
 
-    Static verification: count matched add/subtract pairs per register.
+    IREmbed clobber (definite violation):
+      embed(i, ψ) writes unconditionally to register 'embed_i'.
+      If that name matches a catalytic register, the handler destroys
+      the main process's value — delta marked 'clobbered'.
+
+    IRRotate (net-zero):
+      Each rotation is part of the m-fold ω-loop; the m iterations
+      sum to zero by root-of-unity cancellation (§6.3).
+
+    IRCompose (safe):
+      Lemma 2.1 guarantees the composed program is clean when both
+      sub-programs are individually clean.
     """
-    deltas: dict[str, int] = {reg: 0 for reg in catalytic_regs}
+    deltas: dict[str, str] = {reg: "0" for reg in catalytic_regs}
 
     for node in nodes:
-        if isinstance(node, IRRotate):
-            # Rotation multiplies a register by ω^j.
-            # If the register is catalytic, this is part of the
-            # pattern ω^i · τ which is restored by the full m-loop.
-            # Track as a tagged rotation, not a permanent delta.
-            # The m rotations (j=0..m-1) sum to identity by
-            # root-of-unity cancellation.
-            if node.src and node.src.name in deltas:
-                # Each rotation is part of the m-fold loop;
-                # net effect after m iterations is zero.
-                pass
+        if isinstance(node, IREmbed):
+            # embed(i, ψ) produces register named 'embed_i'.
+            # If that name is in the catalytic set, it's a clobber.
+            embed_name = f"embed_{node.index}"
+            if embed_name in deltas:
+                deltas[embed_name] = f"clobbered_by_embed({node.index},{node.psi})"
 
-        elif isinstance(node, IREmbed):
-            # Embed initializes a register — not a delta on existing catalytic regs
+        elif isinstance(node, IRRotate):
+            # Part of the m-fold loop; net delta is zero.
             pass
 
         elif isinstance(node, IRCompose):
-            # Composition: check that inner structure preserves catalytic invariant.
-            # For correctly lowered programs, composition is safe because
-            # Lemma 2.1 guarantees the composed program is clean if both
-            # sub-programs are clean.
+            # Safe when sub-programs are clean (Lemma 2.1).
             pass
 
-    results = []
-    for reg in catalytic_regs:
-        results.append(RegDelta(
-            register=reg,
-            delta_expr=str(deltas.get(reg, 0))
-        ))
-    return results
+    return [
+        RegDelta(register=reg, delta_expr=expr)
+        for reg, expr in deltas.items()
+    ]
 
 
 def verify_catalytic(prog: IRProgram) -> list[RegDelta]:
-    """Verify the catalytic restore invariant for all catalytic regions.
+    """Verify strict catalytic regions (IRCatalyticRegion / interrupt {}).
 
-    Returns the list of register deltas (all should be "0").
-    Raises CatalyticViolationError if any register is not restored.
+    IRRegion nodes (catalytic {} / advisory) are skipped — the main
+    process owns its registers and has no restoration obligation.
+
+    Returns the list of register deltas for strict regions (all "0").
+    Raises CatalyticViolationError if any register is clobbered.
     """
     all_deltas: list[RegDelta] = []
 
@@ -109,12 +107,13 @@ def verify_catalytic(prog: IRProgram) -> list[RegDelta]:
             if violations:
                 raise CatalyticViolationError(violations)
             all_deltas.extend(deltas)
+        # IRRegion nodes deliberately skipped
 
     return all_deltas
 
 
 def verify_region(region: IRCatalyticRegion) -> list[RegDelta]:
-    """Verify a single catalytic region."""
+    """Verify a single strict catalytic region (interrupt handler)."""
     deltas = _trace_deltas(region.inner_nodes, region.catalytic_regs)
     violations = [d for d in deltas if not d.is_restored]
     if violations:

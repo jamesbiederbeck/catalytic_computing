@@ -11,12 +11,14 @@ from __future__ import annotations
 
 from .ast_nodes import (
     Program, EmbedStmt, RotateStmt, ComposeStmt, MeasureStmt,
-    RootsStmt, CycloPhiStmt, MatPowStmt, CatalyticStmt, ASTNode,
+    RootsStmt, CycloPhiStmt, MatPowStmt, CatalyticStmt, InterruptStmt,
+    AddStmt, CEmbedStmt, ConjStmt, MagSqStmt,
+    ASTNode,
 )
 from .ir_nodes import (
     IRProgram, IRNode, IREmbed, IRPrimitiveRoots, IRRotate,
-    IRPoly, IRMatPow, IRCatalyticRegion, IRCompose, IRMeasure,
-    IRCycloPhiPoly,
+    IRPoly, IRMatPow, IRRegion, IRCatalyticRegion, IRCompose, IRMeasure,
+    IRCycloPhiPoly, IRAdd, IRComplexEmbed, IRConjugate, IRMagnitudeSq,
 )
 from .field import IRField
 
@@ -34,6 +36,7 @@ class Lowering:
         self.ir_field = ir_field
         self.program = IRProgram(ir_field=ir_field)
         self._name_counter = 0
+        self._cembed_counter = 0
 
     def _fresh_name(self, prefix: str) -> str:
         self._name_counter += 1
@@ -62,6 +65,16 @@ class Lowering:
             return self._lower_matpow(stmt)
         elif isinstance(stmt, CatalyticStmt):
             return self._lower_catalytic(stmt)
+        elif isinstance(stmt, InterruptStmt):
+            return self._lower_interrupt(stmt)
+        elif isinstance(stmt, AddStmt):
+            return self._lower_add(stmt)
+        elif isinstance(stmt, CEmbedStmt):
+            return self._lower_cembed(stmt)
+        elif isinstance(stmt, ConjStmt):
+            return self._lower_conj(stmt)
+        elif isinstance(stmt, MagSqStmt):
+            return self._lower_magsq(stmt)
         else:
             raise LoweringError(f"Unknown AST node type: {type(stmt).__name__}")
 
@@ -171,11 +184,10 @@ class Lowering:
         self.program.add_node(node)
         return node
 
-    def _lower_catalytic(self, stmt: CatalyticStmt) -> IRCatalyticRegion:
-        """Lower catalytic { body } restoring (regs).
+    def _lower_catalytic(self, stmt: CatalyticStmt) -> IRRegion:
+        """Lower catalytic { body } restoring (regs) → IRRegion (advisory).
 
-        Wraps the body in an IRCatalyticRegion and marks the
-        restoring registers as catalytic.
+        Main-process use. No restoration obligation enforced.
         """
         inner_nodes = []
         for inner_stmt in stmt.body:
@@ -183,15 +195,37 @@ class Lowering:
             if ir_node is not None:
                 inner_nodes.append(ir_node)
 
-        # Mark restoring registers as catalytic
+        name = self._fresh_name("catalytic")
+        region = IRRegion(
+            name=name,
+            ir_field=self.ir_field,
+            inner_nodes=inner_nodes,
+            catalytic_regs=stmt.restoring,
+        )
+        self.program.add_node(region)
+        return region
+
+    def _lower_interrupt(self, stmt: InterruptStmt) -> IRCatalyticRegion:
+        """Lower interrupt { body } restoring (regs) → IRCatalyticRegion (strict).
+
+        Interrupt handler use. Verifier enforces that listed registers
+        are not clobbered by any inner node.
+        """
+        inner_nodes = []
+        for inner_stmt in stmt.body:
+            ir_node = self._lower_stmt(inner_stmt)
+            if ir_node is not None:
+                inner_nodes.append(ir_node)
+
+        # Mark restoring registers so the verifier can inspect them
         for reg_name in stmt.restoring:
             try:
                 reg_node = self.program.get_node(reg_name)
                 reg_node.is_catalytic = True
             except KeyError:
-                pass  # register may be defined outside this scope
+                pass  # register defined outside this scope; verifier handles it
 
-        name = self._fresh_name("catalytic")
+        name = self._fresh_name("interrupt")
         region = IRCatalyticRegion(
             name=name,
             ir_field=self.ir_field,
@@ -201,11 +235,61 @@ class Lowering:
         self.program.add_node(region)
         return region
 
-    def _lower_measure(self, stmt: MeasureStmt) -> IRMeasure:
-        src_node = self.program.get_node(stmt.src)
-        node = IRMeasure(
+    def _lower_add(self, stmt: AddStmt) -> IRAdd:
+        a_node = self.program.get_node(stmt.a)
+        b_node = self.program.get_node(stmt.b)
+        node = IRAdd(
             name=stmt.name,
             ir_field=self.ir_field,
+            parents=[a_node, b_node],
+        )
+        self.program.add_node(node)
+        return node
+
+    def _lower_cembed(self, stmt: CEmbedStmt) -> IRComplexEmbed:
+        self._cembed_counter += 1
+        name = f"cembed_{self._cembed_counter}"
+        node = IRComplexEmbed(
+            name=name,
+            ir_field=self.ir_field,
+            re_psi=stmt.re_psi,
+            im_psi=stmt.im_psi,
+        )
+        self.program.add_node(node)
+        return node
+
+    def _lower_conj(self, stmt: ConjStmt) -> IRConjugate:
+        src_node = self.program.get_node(stmt.src)
+        node = IRConjugate(
+            name=stmt.name,
+            ir_field=self.ir_field,
+            parents=[src_node],
+        )
+        self.program.add_node(node)
+        return node
+
+    def _lower_magsq(self, stmt: MagSqStmt) -> IRMagnitudeSq:
+        src_node = self.program.get_node(stmt.src)
+        # Output is in the real field (type-lowering: F_{p²} → F_p)
+        out_field = self.ir_field.real_field() if (
+            self.ir_field is not None and self.ir_field.is_complex
+        ) else self.ir_field
+        node = IRMagnitudeSq(
+            name=stmt.name,
+            ir_field=out_field,
+            parents=[src_node],
+        )
+        self.program.add_node(node)
+        return node
+
+    def _lower_measure(self, stmt: MeasureStmt) -> IRMeasure:
+        src_node = self.program.get_node(stmt.src)
+        # Inherit field from the source register (handles type-lowered nodes
+        # like IRMagnitudeSq whose output field differs from the program field).
+        node_field = src_node.ir_field if src_node.ir_field is not None else self.ir_field
+        node = IRMeasure(
+            name=stmt.name,
+            ir_field=node_field,
             mode=stmt.mode,
             src=src_node,
             parents=[src_node],
