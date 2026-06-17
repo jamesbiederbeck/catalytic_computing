@@ -9,7 +9,7 @@ from cmtz.ast_nodes import (
 )
 from cmtz.elaborator import Elaborator, ElaborationError
 from cmtz.field import IRField
-from cmtz.ir_nodes import IRCompose, IRCatalyticRegion, IRPrimitiveRoots
+from cmtz.ir_nodes import IRCompose, IRRegion, IRCatalyticRegion, IRPrimitiveRoots
 from cmtz.lowering import lower
 from cmtz.analysis.catalytic_verify import verify_catalytic, CatalyticViolationError
 from cmtz.analysis.cost_propagation import propagate_costs
@@ -150,6 +150,7 @@ class TestCatalyticVerify:
         assert result.analysis_report.get('catalytic_verified', False)
 
     def test_region_exists_in_ir(self):
+        """catalytic {} lowers to IRRegion (advisory), not IRCatalyticRegion."""
         src = """
         field(7);
         catalytic {
@@ -157,13 +158,97 @@ class TestCatalyticVerify:
         } restoring (r0, r1);
         """
         result = compile_program(src, backend='python')
-        # Should have an IRCatalyticRegion node
-        cat_nodes = [
+        region_nodes = [
+            n for _, n in result.ir_program.nodes()
+            if isinstance(n, IRRegion)
+        ]
+        strict_nodes = [
             n for _, n in result.ir_program.nodes()
             if isinstance(n, IRCatalyticRegion)
         ]
-        assert len(cat_nodes) == 1
-        assert cat_nodes[0].catalytic_regs == ['r0', 'r1']
+        assert len(region_nodes) == 1
+        assert region_nodes[0].catalytic_regs == ['r0', 'r1']
+        assert len(strict_nodes) == 0
+
+    def test_interrupt_exists_in_ir(self):
+        """interrupt {} lowers to IRCatalyticRegion (strict)."""
+        src = """
+        field(7);
+        embed(0, 0);
+        interrupt {
+            embed(1, 2);
+        } restoring (r0);
+        """
+        result = compile_program(src, backend='python')
+        strict_nodes = [
+            n for _, n in result.ir_program.nodes()
+            if isinstance(n, IRCatalyticRegion)
+        ]
+        region_nodes = [
+            n for _, n in result.ir_program.nodes()
+            if type(n) is IRRegion
+        ]
+        assert len(strict_nodes) == 1
+        assert strict_nodes[0].catalytic_regs == ['r0']
+        assert len(region_nodes) == 0
+
+    def test_interrupt_clobber_raises(self):
+        """IREmbed inside interrupt {} targeting a listed register is a violation."""
+        src = """
+        field(7);
+        interrupt {
+            embed(0, 3);
+        } restoring (embed_0);
+        """
+        from cmtz.analysis.catalytic_verify import CatalyticViolationError
+        result = compile_program(src, backend='python')
+        assert not result.ok
+        assert any('Catalytic verification' in e for e in result.errors)
+
+    def test_catalytic_advisory_allows_embed(self):
+        """IREmbed inside catalytic {} targeting a listed register is fine — advisory."""
+        src = """
+        field(7);
+        catalytic {
+            embed(0, 3);
+        } restoring (embed_0);
+        """
+        result = compile_program(src, backend='python')
+        assert result.ok
+
+    def test_interrupt_clean_passes(self):
+        """interrupt {} with no clobber verifies cleanly."""
+        src = """
+        field(7);
+        embed(0, 0);
+        interrupt {
+            embed(1, 2);
+        } restoring (embed_0);
+        """
+        result = compile_program(src, backend='python')
+        assert result.ok
+        assert result.analysis_report['catalytic_verified']
+        assert result.analysis_report['catalytic_deltas'] == [
+            {'register': 'embed_0', 'delta': '0'}
+        ]
+
+    def test_advisory_count_reported(self):
+        """Compiler reports advisory region count separately from verified."""
+        src = """
+        field(7);
+        catalytic {
+            embed(0, 0);
+        } restoring (r0);
+        catalytic {
+            embed(1, 1);
+        } restoring (r1);
+        interrupt {
+            embed(2, 2);
+        } restoring (r2);
+        """
+        result = compile_program(src, backend='python')
+        assert result.analysis_report['catalytic_advisory_count'] == 2
+        assert result.analysis_report['catalytic_verified']
 
 
 # ── Cost propagation tests ───────────────────────────────────────────────────
@@ -293,3 +378,152 @@ class TestMatPow:
         digits = to_base(d, delta)
         reconstructed = sum(a * delta**i for i, a in enumerate(digits))
         assert reconstructed == d
+
+
+# ── Phasor network (v4) tests ─────────────────────────────────────────────────
+
+class TestPhasorNetwork:
+    def test_cfield_declaration(self):
+        """cfield(7) auto-computes c and q."""
+        src = "cfield(7);"
+        result = compile_program(src, backend='python')
+        assert result.ok, f"Errors: {result.errors}"
+        field = result.ir_program.ir_field
+        assert field.is_complex
+        assert field.p == 7
+
+    def test_cfield_q_auto_computed(self):
+        """Auto-computed q for cfield(7) should be a prime >= 49."""
+        src = "cfield(7);"
+        result = compile_program(src, backend='python')
+        assert result.ok
+        field = result.ir_program.ir_field
+        import sympy
+        assert sympy.isprime(field.q)
+        assert field.q >= 7 * 7
+
+    def test_cembed_lowers_to_ir(self):
+        """cembed(0, 1) produces an IRComplexEmbed node."""
+        from cmtz.ir_nodes import IRComplexEmbed
+        src = "cfield(7); cembed(0, 1);"
+        result = compile_program(src, backend='python')
+        assert result.ok, f"Errors: {result.errors}"
+        nodes = [n for _, n in result.ir_program.nodes()
+                 if isinstance(n, IRComplexEmbed)]
+        assert len(nodes) == 1
+        assert nodes[0].re_psi == 0
+        assert nodes[0].im_psi == 1
+
+    def test_cembed_without_cfield_raises(self):
+        """cembed without cfield should fail during elaboration."""
+        src = "field(7); cembed(0, 1);"
+        result = compile_program(src, backend='python')
+        assert not result.ok
+        assert any("cfield" in e for e in result.errors)
+
+    def test_add_two_real_registers(self):
+        """add(a, b) on real field registers works end-to-end."""
+        src = """
+        field(7);
+        embed(0, 0);
+        embed(1, 1);
+        add(embed_0, embed_1) as ab;
+        measure(ab, mod_p) as result;
+        """
+        result = compile_program(src, backend='python')
+        assert result.ok, f"Errors: {result.errors}"
+        assert 'result' in result.backend_output
+
+    def test_add_lowers_to_ir(self):
+        """add(a, b) produces an IRAdd node."""
+        from cmtz.ir_nodes import IRAdd
+        src = """
+        field(7);
+        embed(0, 0);
+        embed(1, 0);
+        add(embed_0, embed_1) as ab;
+        """
+        result = compile_program(src, backend='python')
+        assert result.ok
+        add_nodes = [n for _, n in result.ir_program.nodes() if isinstance(n, IRAdd)]
+        assert len(add_nodes) == 1
+
+    def test_conj_lowers_to_ir(self):
+        """conj(a) produces an IRConjugate node."""
+        from cmtz.ir_nodes import IRConjugate
+        src = """
+        cfield(7);
+        cembed(0, 1);
+        conj(cembed_1) as c;
+        """
+        result = compile_program(src, backend='python')
+        assert result.ok, f"Errors: {result.errors}"
+        conj_nodes = [n for _, n in result.ir_program.nodes() if isinstance(n, IRConjugate)]
+        assert len(conj_nodes) == 1
+
+    def test_magsq_lowers_to_ir(self):
+        """magsq(a) produces an IRMagnitudeSq node."""
+        from cmtz.ir_nodes import IRMagnitudeSq
+        src = """
+        cfield(7);
+        cembed(0, 1);
+        magsq(cembed_1) as ms;
+        """
+        result = compile_program(src, backend='python')
+        assert result.ok, f"Errors: {result.errors}"
+        msq_nodes = [n for _, n in result.ir_program.nodes() if isinstance(n, IRMagnitudeSq)]
+        assert len(msq_nodes) == 1
+
+    def test_magsq_type_lowers_to_real(self):
+        """IRMagnitudeSq output field should be real (c=None)."""
+        from cmtz.ir_nodes import IRMagnitudeSq
+        src = """
+        cfield(7);
+        cembed(0, 1);
+        magsq(cembed_1) as ms;
+        """
+        result = compile_program(src, backend='python')
+        assert result.ok
+        msq = next(n for _, n in result.ir_program.nodes() if isinstance(n, IRMagnitudeSq))
+        assert not msq.ir_field.is_complex
+
+    def test_full_phasor_pipeline(self):
+        """cembed → add → magsq → measure end-to-end."""
+        src = """
+        cfield(7);
+        cembed(0, 1);
+        cembed(2, 0);
+        add(cembed_1, cembed_2) as C;
+        magsq(C) as power;
+        measure(power, mod_p) as result;
+        """
+        result = compile_program(src, backend='python')
+        assert result.ok, f"Errors: {result.errors}"
+        assert 'result' in result.backend_output
+        # result should be a value in F_7
+        val = result.backend_output['result']
+        assert 0 <= val < 7
+
+    def test_phasor_result_correct(self):
+        """Verify numerical correctness for a known phasor computation.
+
+        cfield(7): c = find_nonresidue(7), roots = primitive_roots_Fp(7)
+        cembed(0, 1): A = (roots[0], roots[1]) = (1, g) where g=generator
+        magsq(A) = 1² - g²·c mod 7
+        """
+        from cmtz.field import find_nonresidue, primitive_roots_Fp, magsq_Fp2
+        src = """
+        cfield(7);
+        cembed(0, 1);
+        magsq(cembed_1) as ms;
+        measure(ms, mod_p) as result;
+        """
+        result = compile_program(src, backend='python')
+        assert result.ok, f"Errors: {result.errors}"
+
+        # Compute expected value manually
+        c = find_nonresidue(7)
+        roots = primitive_roots_Fp(7)
+        A = (roots[0], roots[1])
+        expected = magsq_Fp2(A, 7, c)
+        assert result.backend_output['result'] == expected
