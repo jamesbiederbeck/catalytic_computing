@@ -1,0 +1,1584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Cook-Mertz IR Visualizer</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #0f1117;
+  --surface:  #1a1d27;
+  --surface2: #22263a;
+  --border:   #2e3348;
+  --text:     #e2e4f0;
+  --dim:      #7880a0;
+  --accent:   #7c6af5;
+  --green:    #4ade80;
+  --red:      #f87171;
+  --yellow:   #facc15;
+
+  --c-embed:        #3b82f6;
+  --c-cembed:       #8b5cf6;
+  --c-rotate:       #22c55e;
+  --c-add:          #f97316;
+  --c-compose:      #64748b;
+  --c-measure:      #ec4899;
+  --c-roots:        #06b6d4;
+  --c-conj:         #a855f7;
+  --c-magsq:        #eab308;
+  --c-matpow:       #6366f1;
+  --c-region:       #475569;
+  --c-catregion:    #d97706;
+  --c-cyclophipoly: #14b8a6;
+  --c-poly:         #84cc16;
+  --c-default:      #94a3b8;
+
+  /* layout sizing */
+  --header-h:   44px;
+  --timeline-h: 72px;
+  --editor-w:   300px;
+}
+
+/* ── Root: use dvh so mobile browser chrome doesn't clip ── */
+html, body {
+  height: 100%;
+  /* fallback then override */
+  height: 100dvh;
+}
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 14px;
+  overflow: hidden;
+  /* safe areas for notched phones */
+  padding-left:   env(safe-area-inset-left);
+  padding-right:  env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* ── Header ── */
+header {
+  height: var(--header-h);
+  min-height: var(--header-h);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+header h1 {
+  font-size: 14px; font-weight: 700; letter-spacing: .02em; white-space: nowrap;
+}
+header h1 span { color: var(--accent); }
+
+#analysis-badges {
+  display: flex; gap: 5px; flex-wrap: nowrap; overflow: hidden;
+  min-width: 0; /* allow shrink */
+}
+.badge {
+  font-size: 10px; padding: 2px 7px; border-radius: 999px;
+  background: var(--surface2); color: var(--dim);
+  border: 1px solid var(--border); white-space: nowrap; flex-shrink: 0;
+  transition: background .2s, color .2s, border-color .2s;
+}
+.badge.ok   { background:#14532d; color:var(--green);  border-color:#166534; }
+.badge.fail { background:#450a0a; color:var(--red);    border-color:#7f1d1d; }
+
+/* hide badges and stats on narrow screens */
+@media (max-width: 540px) {
+  #analysis-badges { display: none; }
+  #opt-stat        { display: none; }
+}
+
+.hdr-right { margin-left: auto; display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+
+select {
+  background: var(--surface2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 4px 6px; font-size: 12px; cursor: pointer;
+  max-width: 140px;
+}
+@media (max-width: 480px) { select { display: none; } }
+
+button {
+  background: var(--accent); color: #fff; border: none; border-radius: 6px;
+  padding: 5px 11px; font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: opacity .15s; white-space: nowrap; flex-shrink: 0;
+  /* 44px minimum touch target */
+  min-height: 34px;
+}
+button:hover   { opacity: .85; }
+button:disabled { opacity: .4; cursor: default; }
+button.ghost {
+  background: var(--surface2); color: var(--dim);
+  border: 1px solid var(--border);
+}
+button.ghost:hover { color: var(--text); }
+.opt-stat { font-size: 11px; color: var(--dim); white-space: nowrap; }
+.opt-stat b { color: var(--yellow); font-weight: 600; }
+
+/* ── Main area: fills all remaining space ── */
+.main {
+  flex: 1;
+  min-height: 0;          /* CRITICAL: lets flex children shrink below content size */
+  display: flex;
+  overflow: hidden;
+}
+
+/* ── Editor panel ── */
+.left {
+  width: var(--editor-w);
+  min-width: var(--editor-w);
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+  /* slide transition for mobile */
+  transition: margin-left .22s ease;
+}
+.left.hidden {
+  margin-left: calc(-1 * var(--editor-w));
+}
+.panel-hdr {
+  padding: 6px 12px; font-size: 10px; font-weight: 700; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--dim); border-bottom: 1px solid var(--border);
+  flex-shrink: 0; display: flex; justify-content: space-between; align-items: center;
+}
+#editor {
+  flex: 1;
+  min-height: 0;
+  background: #0d0f18; color: #c9d1e8;
+  font-family: 'JetBrains Mono','Fira Code',monospace; font-size: 12px; line-height: 1.65;
+  padding: 12px; border: none; resize: none; outline: none; tab-size: 4;
+}
+
+/* ── Right column ── */
+.right {
+  flex: 1;
+  min-width: 0;           /* allow shrinking */
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Error banner ── */
+#error-banner {
+  display: none;
+  flex-shrink: 0;
+  background: #450a0a; border-bottom: 1px solid #7f1d1d;
+  color: var(--red); padding: 8px 14px; font-size: 12px;
+  white-space: pre-wrap; max-height: 90px; overflow-y: auto;
+}
+
+/* ── DAG viewport ── */
+#dag-container {
+  flex: 1;
+  min-height: 0;          /* CRITICAL */
+  overflow: hidden;
+  position: relative;
+  touch-action: none;     /* let JS handle all touch */
+  cursor: grab;
+  background: radial-gradient(ellipse at 50% 50%, #131726 0%, #0f1117 100%);
+}
+#dag-container.panning { cursor: grabbing; }
+
+/* The SVG is oversized so the content has room to pan outside viewport */
+#dag-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* ── Timeline ── */
+#timeline {
+  flex-shrink: 0;
+  height: var(--timeline-h);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 6px 10px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.tl-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mode-btn {
+  font-size: 11px; padding: 3px 9px; border-radius: 5px; cursor: pointer;
+  background: var(--surface2); color: var(--dim);
+  border: 1px solid var(--border); flex-shrink: 0;
+  min-height: 28px;
+  transition: .15s;
+}
+.mode-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.tl-div { width: 1px; height: 16px; background: var(--border); margin: 0 1px; flex-shrink: 0; }
+
+#tl-slider {
+  flex: 1;
+  min-width: 40px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  height: 18px;   /* bigger touch target */
+}
+#tl-speed {
+  width: 64px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  height: 18px;
+  flex-shrink: 0;
+}
+#tl-label {
+  font-size: 11px; color: var(--dim); white-space: nowrap; flex-shrink: 0;
+  min-width: 70px; text-align: right;
+}
+.icon-btn {
+  background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; font-size: 14px; padding: 0 8px;
+  cursor: pointer; min-height: 30px; min-width: 32px;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.icon-btn:hover { background: var(--surface); }
+#tl-play {
+  background: var(--accent); color: #fff; border-color: transparent;
+  min-width: 36px;
+}
+#tl-play:hover { opacity: .85; }
+
+/* hide speed label on narrow screens */
+@media (max-width: 480px) { .spd-label { display: none; } }
+
+/* ── Viz panel ── */
+#viz-panel {
+  flex-shrink: 0;
+  display: none;                 /* shown once compiled */
+  height: 180px;
+  background: #0d0f18;
+  border-top: 1px solid var(--border);
+  overflow: hidden;
+}
+#viz-panel.visible { display: flex; }
+
+#viz-panel canvas {
+  display: block;
+  image-rendering: crisp-edges;
+}
+
+#state-wrap {
+  width: 180px;
+  min-width: 180px;
+  height: 180px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  position: relative;
+}
+#state-canvas { width: 180px; height: 180px; }
+
+#graph-wrap {
+  flex: 1;
+  min-width: 0;
+  height: 180px;
+  position: relative;
+}
+#graph-canvas { width: 100%; height: 180px; }
+#vec-toggle {
+  position: absolute; top: 5px; right: 7px;
+  font: 10px/1 monospace;
+  background: var(--surface2); color: var(--dim);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 3px 7px; cursor: pointer; z-index: 2;
+}
+#vec-toggle:hover { color: var(--text); }
+#vec-toggle.active { background: var(--accent); color: #fff; border-color: transparent; }
+
+/* on very narrow screens collapse the state vector; graph fills width */
+@media (max-width: 480px) {
+  #state-wrap { display: none; }
+  #viz-panel { height: 140px; }
+  #graph-wrap, #graph-canvas { height: 140px; }
+}
+
+/* ── Detail drawer ── */
+#detail {
+  flex-shrink: 0;
+  max-height: 180px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  overflow-y: auto;
+  transition: max-height .2s;
+}
+#detail.empty { max-height: 0; }
+.detail-inner { padding: 10px 14px; }
+.detail-title {
+  font-size: 13px; font-weight: 700; margin-bottom: 7px;
+  display: flex; align-items: center; gap: 8px;
+}
+.type-pill {
+  font-size: 10px; font-weight: 500; padding: 2px 7px; border-radius: 4px;
+  background: var(--surface2);
+}
+.kv-grid { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 12px; }
+.kv-grid dt { color: var(--dim); white-space: nowrap; }
+.kv-grid dd { color: var(--text); font-family: monospace; word-break: break-all; }
+.kv-grid dd.hi { color: var(--green); font-weight: 700; }
+
+/* ── Phase ring ── */
+#phase-ring-wrap {
+  position: absolute;
+  bottom: 12px; left: 12px;
+  background: rgba(26,29,39,.9);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  display: none;
+  pointer-events: none;
+}
+#phase-ring-wrap.visible { display: block; }
+#phase-canvas { display: block; width: 110px; height: 110px; }
+
+/* ── Legend ── */
+#legend {
+  position: absolute;
+  top: 10px; right: 10px;
+  background: rgba(26,29,39,.93);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 11px;
+  pointer-events: none;
+}
+#legend h4 {
+  font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--dim); margin-bottom: 4px;
+}
+.legend-row { display: flex; align-items: center; gap: 6px; margin: 2px 0; color: var(--dim); }
+.legend-dot { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+@media (max-width: 480px) { #legend { display: none; } }
+
+/* ── Loading ── */
+#loading {
+  display: none; position: absolute; inset: 0;
+  background: rgba(15,17,23,.5);
+  align-items: center; justify-content: center;
+  font-size: 13px; color: var(--dim); z-index: 20;
+}
+#loading.active { display: flex; }
+
+/* ── SVG node styles ── */
+.node-g     { cursor: pointer; }
+.node-rect  { transition: fill .18s, stroke .18s, stroke-width .12s; }
+.node-type  { font-family: system-ui; font-size: 9px; fill: rgba(255,255,255,.48);
+              pointer-events: none; dominant-baseline: middle; text-anchor: middle; }
+.node-label { font-family: 'JetBrains Mono',monospace; font-size: 11px; fill: #fff;
+              pointer-events: none; dominant-baseline: middle; text-anchor: middle; }
+.node-value { font-family: 'JetBrains Mono',monospace; font-size: 10px;
+              pointer-events: none; dominant-baseline: middle; text-anchor: middle;
+              transition: fill .18s; }
+.edge { fill: none; stroke: var(--border); stroke-width: 1.5; marker-end: url(#arrow); }
+.edge.hl { stroke: #7c6af5; stroke-width: 2.5; marker-end: url(#arrow-hl); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Cook-<span>Mertz</span> IR</h1>
+  <div id="analysis-badges">
+    <span class="badge" id="b-acyclic">acyclic</span>
+    <span class="badge" id="b-field">field</span>
+    <span class="badge" id="b-catalytic">catalytic</span>
+    <span class="badge" id="b-budget">budget</span>
+  </div>
+  <span class="opt-stat" id="opt-stat"></span>
+  <div class="hdr-right">
+    <button class="ghost" id="editor-toggle" title="Toggle editor">⌨</button>
+    <select id="ex-sel"><option value="">— example —</option></select>
+    <button id="compile-btn">Run ▶</button>
+    <button class="ghost" id="fit-btn">Fit</button>
+  </div>
+</header>
+
+<div class="main">
+  <div class="left" id="left-panel">
+    <div class="panel-hdr">
+      Source
+      <span style="font-weight:400;text-transform:none;font-size:10px;color:var(--dim)">Ctrl+↵</span>
+    </div>
+    <textarea id="editor" spellcheck="false"></textarea>
+  </div>
+
+  <div class="right">
+    <div id="error-banner"></div>
+
+    <div id="dag-container">
+      <div id="loading">Compiling…</div>
+      <svg id="dag-svg">
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3z" fill="#2e3348"/>
+          </marker>
+          <marker id="arrow-hl" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3z" fill="#7c6af5"/>
+          </marker>
+        </defs>
+        <g id="dag-root"></g>
+      </svg>
+
+      <div id="phase-ring-wrap">
+        <canvas id="phase-canvas" width="110" height="110"></canvas>
+      </div>
+
+      <div id="legend">
+        <h4>Types</h4>
+        <div class="legend-row"><div class="legend-dot" style="background:var(--c-embed)"></div>embed</div>
+        <div class="legend-row"><div class="legend-dot" style="background:var(--c-cembed)"></div>cembed</div>
+        <div class="legend-row"><div class="legend-dot" style="background:var(--c-rotate)"></div>rotate</div>
+        <div class="legend-row"><div class="legend-dot" style="background:var(--c-add)"></div>add</div>
+        <div class="legend-row"><div class="legend-dot" style="background:var(--c-compose)"></div>compose</div>
+        <div class="legend-row"><div class="legend-dot" style="background:var(--c-measure)"></div>measure</div>
+        <div class="legend-row"><div class="legend-dot" style="background:var(--c-magsq)"></div>magsq</div>
+        <div class="legend-row"><div class="legend-dot" style="background:var(--c-matpow)"></div>matpow</div>
+        <div class="legend-row"><div class="legend-dot" style="background:var(--c-catregion)"></div>interrupt</div>
+      </div>
+    </div>
+
+    <!-- Timeline: fixed height, always visible -->
+    <div id="timeline">
+      <div class="tl-row">
+        <button class="mode-btn active" id="mode-phase">Phase ∿</button>
+        <button class="mode-btn"        id="mode-prop">Propagate →</button>
+        <div class="tl-div"></div>
+        <button class="icon-btn" id="tl-back">◀</button>
+        <button class="icon-btn" id="tl-fwd">▶</button>
+        <button class="icon-btn" id="tl-play" style="background:var(--accent);color:#fff;border-color:transparent">▶︎</button>
+        <div class="tl-div"></div>
+        <span class="spd-label" style="font-size:11px;color:var(--dim)">Speed</span>
+        <input type="range" id="tl-speed" min="1" max="10" value="4">
+        <div class="tl-div"></div>
+        <span id="tl-label">k = 0 / 0</span>
+      </div>
+      <div class="tl-row">
+        <input type="range" id="tl-slider" min="0" max="0" value="0">
+      </div>
+    </div>
+
+    <!-- Viz panel: state vector + phase graph -->
+    <div id="viz-panel">
+      <div id="state-wrap">
+        <canvas id="state-canvas" width="180" height="180"></canvas>
+      </div>
+      <div id="graph-wrap">
+        <canvas id="graph-canvas" width="800" height="180"></canvas>
+        <button id="vec-toggle" title="Toggle phasor vector overlay on nodes">⟳ vectors</button>
+      </div>
+    </div>
+
+    <div id="detail" class="empty">
+      <div class="detail-inner" id="detail-inner"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// Constants
+// ═══════════════════════════════════════════════════════════════
+
+const TYPE_COLOR = {
+  IREmbed:'var(--c-embed)', IRComplexEmbed:'var(--c-cembed)',
+  IRRotate:'var(--c-rotate)', IRAdd:'var(--c-add)',
+  IRCompose:'var(--c-compose)', IRMeasure:'var(--c-measure)',
+  IRPrimitiveRoots:'var(--c-roots)', IRConjugate:'var(--c-conj)',
+  IRMagnitudeSq:'var(--c-magsq)', IRMatPow:'var(--c-matpow)',
+  IRRegion:'var(--c-region)', IRCatalyticRegion:'var(--c-catregion)',
+  IRCycloPhiPoly:'var(--c-cyclophipoly)', IRPoly:'var(--c-poly)',
+};
+const TYPE_SHORT = {
+  IREmbed:'embed', IRComplexEmbed:'cembed', IRRotate:'rotate',
+  IRAdd:'add', IRCompose:'compose', IRMeasure:'measure',
+  IRPrimitiveRoots:'roots', IRConjugate:'conj', IRMagnitudeSq:'magsq',
+  IRMatPow:'matpow', IRRegion:'catalytic', IRCatalyticRegion:'interrupt',
+  IRCycloPhiPoly:'cyclo_phi', IRPoly:'poly',
+};
+
+const NODE_W = 134, NODE_H = 58, H_GAP = 48, V_GAP = 78;
+
+// ═══════════════════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════════════════
+
+let graph          = null;
+let nodeEls        = new Map();   // name → {g, rect, valueLabel}
+let nodePositions  = {};          // name → {x, y} in DAG coords
+let selected       = null;
+let xf             = { x:0, y:0, scale:1 };
+let playing        = false;
+let playTimer      = null;
+let tlMode         = 'phase';
+let tlStep         = 0;
+let showVectors    = false;
+
+// Pan state (mouse + touch)
+let panState      = null;  // { sx, sy, tx, ty }
+let pinchState    = null;  // { dist, cx, cy, tx, ty, sc }
+
+// ═══════════════════════════════════════════════════════════════
+// DOM
+// ═══════════════════════════════════════════════════════════════
+
+const $ = id => document.getElementById(id);
+const editor      = $('editor');
+const compileBtn  = $('compile-btn');
+const fitBtn      = $('fit-btn');
+const errBanner   = $('error-banner');
+const loadingEl   = $('loading');
+const dagRoot     = $('dag-root');
+const dagSvg      = $('dag-svg');
+const dagCtr      = $('dag-container');
+const detail      = $('detail');
+const detailInner = $('detail-inner');
+const exSel       = $('ex-sel');
+const tlSlider    = $('tl-slider');
+const tlLabel     = $('tl-label');
+const tlPlay      = $('tl-play');
+const tlBack      = $('tl-back');
+const tlFwd       = $('tl-fwd');
+const tlSpeed     = $('tl-speed');
+const modePhase   = $('mode-phase');
+const modeProp    = $('mode-prop');
+const phaseRing    = $('phase-ring-wrap');
+const phaseCanvas  = $('phase-canvas');
+const leftPanel    = $('left-panel');
+const editorToggle = $('editor-toggle');
+const vizPanel     = $('viz-panel');
+const stateCanvas  = $('state-canvas');
+const graphCanvas  = $('graph-canvas');
+const vecToggle    = $('vec-toggle');
+const stateCtx     = stateCanvas.getContext('2d');
+const graphCtx     = graphCanvas.getContext('2d');
+
+// ═══════════════════════════════════════════════════════════════
+// Editor toggle
+// ═══════════════════════════════════════════════════════════════
+
+let editorVisible = true;
+function toggleEditor() {
+  editorVisible = !editorVisible;
+  leftPanel.classList.toggle('hidden', !editorVisible);
+}
+editorToggle.addEventListener('click', toggleEditor);
+
+// Hide editor by default on narrow screens
+if (window.innerWidth < 640) { editorVisible = false; leftPanel.classList.add('hidden'); }
+
+// ═══════════════════════════════════════════════════════════════
+// Badges
+// ═══════════════════════════════════════════════════════════════
+
+function setBadge(id, ok, text) {
+  const el = $(id);
+  el.textContent = text;
+  el.className = 'badge ' + (ok === null ? '' : ok ? 'ok' : 'fail');
+}
+function updateBadges(a, o) {
+  setBadge('b-acyclic',   a.acyclic,           a.acyclic ? 'acyclic ✓' : 'cycle! ✗');
+  setBadge('b-field',     a.field_consistent,  a.field_consistent ? 'field ✓' : 'field ✗');
+  setBadge('b-catalytic', a.catalytic_verified, a.catalytic_verified ? 'catalytic ✓' : 'catalytic ✗');
+  const budget = a.budget_check || {};
+  const hasBudget = Object.keys(budget).length > 0;
+  const allOk = Object.values(budget).every(v => v?.within_budget !== false);
+  setBadge('b-budget', hasBudget ? allOk : null,
+    hasBudget ? (allOk ? 'budget ✓' : 'budget ✗') : 'budget –');
+  const parts = [];
+  if (o.rotations_fused)  parts.push(`<b>${o.rotations_fused}</b> fused`);
+  if (o.cse_eliminated)   parts.push(`<b>${o.cse_eliminated}</b> CSE`);
+  if (o.constants_folded) parts.push(`<b>${o.constants_folded}</b> folded`);
+  $('opt-stat').innerHTML = parts.join(' · ');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Layout
+// ═══════════════════════════════════════════════════════════════
+
+function layoutNodes(nodes) {
+  const byLayer = {};
+  for (const n of nodes) (byLayer[n.layer] ??= []).push(n);
+  const maxLayer = Math.max(...nodes.map(n => n.layer));
+  const pos = {};
+  for (let l = 0; l <= maxLayer; l++) {
+    const grp = byLayer[l] || [];
+    const total = grp.length * NODE_W + (grp.length - 1) * H_GAP;
+    grp.forEach((n, i) => {
+      pos[n.name] = {
+        x: i * (NODE_W + H_GAP) - total / 2 + NODE_W / 2,
+        y: l * (NODE_H + V_GAP),
+      };
+    });
+  }
+  return pos;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SVG
+// ═══════════════════════════════════════════════════════════════
+
+const NS = 'http://www.w3.org/2000/svg';
+const svg = (tag, a={}) => {
+  const el = document.createElementNS(NS, tag);
+  for (const [k,v] of Object.entries(a)) el.setAttribute(k, v);
+  return el;
+};
+const bezier = (x1,y1,x2,y2) => {
+  const dy = y2-y1;
+  return `M${x1},${y1} C${x1},${y1+dy*.42} ${x2},${y2-dy*.42} ${x2},${y2}`;
+};
+
+function renderGraph(nodes) {
+  dagRoot.innerHTML = '';
+  nodeEls.clear();
+  if (!nodes.length) return;
+
+  const pos = layoutNodes(nodes);
+
+  // Edges (behind nodes)
+  const eGrp = svg('g', {id:'edges'});
+  for (const n of nodes) {
+    const c = pos[n.name];
+    for (const pname of n.parents) {
+      const p = pos[pname];
+      if (!p) continue;
+      eGrp.appendChild(svg('path', {
+        class: 'edge',
+        d: bezier(p.x, p.y+NODE_H/2, c.x, c.y-NODE_H/2),
+        'data-from': pname, 'data-to': n.name,
+      }));
+    }
+  }
+  dagRoot.appendChild(eGrp);
+
+  // Nodes
+  const nGrp = svg('g', {id:'nodes'});
+  for (const n of nodes) {
+    const {x,y} = pos[n.name];
+    const col   = TYPE_COLOR[n.type] || 'var(--c-default)';
+    const short = TYPE_SHORT[n.type] || n.type;
+
+    const g = svg('g', {
+      class:'node-g',
+      transform:`translate(${x-NODE_W/2},${y-NODE_H/2})`,
+      'data-name': n.name,
+    });
+    const rect = svg('rect', {
+      class:'node-rect', width:NODE_W, height:NODE_H, rx:8, ry:8,
+      fill:col, 'fill-opacity':'0.09', stroke:col, 'stroke-width':'1.5',
+    });
+    g.appendChild(rect);
+
+    const tl = svg('text', {class:'node-type', x:NODE_W/2, y:12});
+    tl.textContent = short;
+    g.appendChild(tl);
+
+    const nl = svg('text', {class:'node-label', x:NODE_W/2, y:NODE_H/2+2});
+    nl.textContent = n.name.length > 16 ? n.name.slice(0,14)+'…' : n.name;
+    g.appendChild(nl);
+
+    const vl = svg('text', {class:'node-value', x:NODE_W/2, y:NODE_H-9, fill:'#4ade80'});
+    if (n.value != null) vl.textContent = '= '+n.value;
+    g.appendChild(vl);
+
+    g.addEventListener('click', e => { e.stopPropagation(); selectNode(n.name); });
+    nGrp.appendChild(g);
+    nodeEls.set(n.name, {g, rect, valueLabel:vl});
+  }
+  dagRoot.appendChild(nGrp);
+
+  // Vector overlay group (drawn on top of nodes)
+  dagRoot.appendChild(svg('g', {id:'vec-overlay'}));
+
+  nodePositions = pos;
+  fitView(pos, nodes);
+}
+
+function fitView(pos, nodes) {
+  if (!nodes.length) return;
+  const pad = 48;
+  const xs = nodes.map(n => pos[n.name].x);
+  const ys = nodes.map(n => pos[n.name].y);
+  const W = dagCtr.clientWidth  || 600;
+  const H = dagCtr.clientHeight || 400;
+  const minX = Math.min(...xs)-NODE_W/2-pad, maxX = Math.max(...xs)+NODE_W/2+pad;
+  const minY = Math.min(...ys)-NODE_H/2-pad, maxY = Math.max(...ys)+NODE_H/2+pad;
+  const sc = Math.min(1.6, 0.92*Math.min(W/(maxX-minX), H/(maxY-minY)));
+  xf = { x: W/2 - sc*(minX+maxX)/2, y: H/2 - sc*(minY+maxY)/2, scale: sc };
+  applyXf();
+}
+
+function applyXf() {
+  dagRoot.setAttribute('transform', `translate(${xf.x},${xf.y}) scale(${xf.scale})`);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Selection
+// ═══════════════════════════════════════════════════════════════
+
+function selectNode(name) {
+  if (selected === name) { clearSel(); return; }
+  selected = name;
+  nodeEls.forEach((el,n) => el.rect.setAttribute('stroke-width', n===name ? '3' : '1.5'));
+  document.querySelectorAll('.edge').forEach(e => {
+    const on = e.dataset.from===name || e.dataset.to===name;
+    e.classList.toggle('hl', on);
+  });
+  const n = graph.nodes.find(x => x.name === name);
+  if (n) showDetail(n);
+  if (tlMode === 'phase') drawPhaseRing(name);
+  drawViz();
+}
+
+function clearSel() {
+  selected = null;
+  nodeEls.forEach(el => el.rect.setAttribute('stroke-width','1.5'));
+  document.querySelectorAll('.edge').forEach(e => e.classList.remove('hl'));
+  detail.classList.add('empty');
+  phaseRing.classList.remove('visible');
+  drawViz();
+}
+
+dagCtr.addEventListener('click', e => {
+  if (!e.target.closest('.node-g')) clearSel();
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Detail
+// ═══════════════════════════════════════════════════════════════
+
+function curNodeVal(name) {
+  if (!graph) return null;
+  if (tlMode === 'phase' && graph.frames.length)
+    return graph.frames[tlStep % graph.frames.length]?.[name]?.str ?? null;
+  return graph.nodes.find(x=>x.name===name)?.value ?? null;
+}
+
+function showDetail(n) {
+  const col = TYPE_COLOR[n.type] || 'var(--c-default)';
+  const rows = [];
+  const kv = (k,v,hi=false) => rows.push(
+    `<dt>${k}</dt><dd${hi?' class="hi"':''}>${v}</dd>`);
+
+  const lv = curNodeVal(n.name);
+  if (lv != null) kv('value', lv, true);
+  if (n.field) {
+    const f = n.field;
+    kv('field', f.is_complex ? `F<sub>${f.p}²</sub> (c=${f.c})` : `F<sub>${f.p}</sub>`);
+  }
+  if (n.parents.length) kv('parents', n.parents.join(', '));
+  for (const [k,v] of Object.entries(n.details))
+    kv(k, Array.isArray(v) ? v.join(', ') : v);
+  const c = n.cost;
+  if (c.t||c.s||c.r) kv('cost (t,s,r)', `${c.t}, ${c.s}, ${c.r}`);
+
+  detailInner.innerHTML = `
+    <div class="detail-title"><code>${n.name}</code>
+      <span class="type-pill" style="color:${col};border:1px solid ${col}40;background:${col}15">
+        ${TYPE_SHORT[n.type]||n.type}</span></div>
+    <dl class="kv-grid">${rows.join('')}</dl>`;
+  detail.classList.remove('empty');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Colour helpers
+// ═══════════════════════════════════════════════════════════════
+
+function valHue(num, p) {
+  if (num == null) return null;
+  if (Array.isArray(num)) {
+    return ((Math.atan2(num[1], num[0]) / (2*Math.PI) + 1) % 1) * 360;
+  }
+  return (num / p) * 360;
+}
+const hslFill   = h => `hsla(${h|0},78%,21%,0.92)`;
+const hslStroke = h => `hsl(${h|0},88%,57%)`;
+
+// ═══════════════════════════════════════════════════════════════
+// Phase animation
+// ═══════════════════════════════════════════════════════════════
+
+function applyPhaseFrame(k) {
+  if (!graph?.frames.length) return;
+  const frame = graph.frames[k % graph.frames.length];
+  const p = graph.nodes[0]?.field?.p || 17;
+
+  for (const n of graph.nodes) {
+    const el = nodeEls.get(n.name);
+    if (!el) continue;
+    const entry = frame[n.name];
+    if (!entry) continue;
+    const hue = valHue(entry.num, p);
+    if (hue != null) {
+      el.rect.setAttribute('fill',   hslFill(hue));
+      el.rect.setAttribute('stroke', hslStroke(hue));
+      el.valueLabel.setAttribute('fill', hslStroke(hue));
+    }
+    el.valueLabel.textContent = '= ' + entry.str;
+  }
+
+  if (selected) {
+    drawPhaseRing(selected);
+    const hi = detailInner.querySelector('.hi');
+    if (hi) hi.textContent = curNodeVal(selected) ?? '';
+  }
+}
+
+function resetNodeColors() {
+  if (!graph) return;
+  for (const n of graph.nodes) {
+    const el = nodeEls.get(n.name);
+    if (!el) continue;
+    const col = TYPE_COLOR[n.type] || 'var(--c-default)';
+    el.rect.setAttribute('fill', col);
+    el.rect.setAttribute('fill-opacity', '0.09');
+    el.rect.setAttribute('stroke', col);
+    el.valueLabel.setAttribute('fill', '#4ade80');
+    el.valueLabel.textContent = n.value != null ? '= '+n.value : '';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Propagation animation
+// ═══════════════════════════════════════════════════════════════
+
+function applyPropStep(layer) {
+  if (!graph) return;
+  for (const n of graph.nodes) {
+    const el = nodeEls.get(n.name);
+    if (!el) continue;
+    const col = TYPE_COLOR[n.type] || 'var(--c-default)';
+    if (n.layer < layer) {
+      el.g.style.opacity = '1';
+      el.rect.setAttribute('fill', col);
+      el.rect.setAttribute('fill-opacity', '0.09');
+      el.rect.setAttribute('stroke', col);
+      el.rect.setAttribute('stroke-width', '1.5');
+      el.valueLabel.setAttribute('fill', '#4ade80');
+      el.valueLabel.textContent = n.value != null ? '= '+n.value : '';
+    } else if (n.layer === layer) {
+      el.g.style.opacity = '1';
+      el.rect.setAttribute('fill', col);
+      el.rect.setAttribute('fill-opacity', '0.27');
+      el.rect.setAttribute('stroke', col);
+      el.rect.setAttribute('stroke-width', '3');
+      el.valueLabel.setAttribute('fill', '#facc15');
+      el.valueLabel.textContent = n.value != null ? '= '+n.value : '';
+    } else {
+      el.g.style.opacity = '0.1';
+      el.valueLabel.textContent = '';
+    }
+  }
+  document.querySelectorAll('.edge').forEach(e => {
+    const fromN = graph.nodes.find(n => n.name === e.dataset.from);
+    const toN   = graph.nodes.find(n => n.name === e.dataset.to);
+    if (!fromN || !toN) return;
+    e.style.opacity = (fromN.layer < layer && toN.layer <= layer) ? '1' : '0.07';
+    e.classList.toggle('hl', fromN.layer < layer && toN.layer === layer);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Phase ring canvas
+// ═══════════════════════════════════════════════════════════════
+
+function drawPhaseRing(name) {
+  if (!graph?.frames.length) return;
+  const node = graph.nodes.find(n => n.name === name);
+  if (!node?.field) return;
+  const p = node.field.p;
+  const values = graph.frames.map(f => f[name]?.num).filter(v => v != null);
+  if (!values.length) return;
+
+  const ctx = phaseCanvas.getContext('2d');
+  const cx = 55, cy = 55, R = 42;
+  ctx.clearRect(0, 0, 110, 110);
+
+  // Ring
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI*2);
+  ctx.strokeStyle = '#2e3348'; ctx.lineWidth = 1; ctx.stroke();
+
+  // Ticks
+  for (let v = 0; v < p; v++) {
+    const a = (v/p)*Math.PI*2 - Math.PI/2;
+    ctx.beginPath();
+    ctx.moveTo(cx+(R-3)*Math.cos(a), cy+(R-3)*Math.sin(a));
+    ctx.lineTo(cx+(R+3)*Math.cos(a), cy+(R+3)*Math.sin(a));
+    ctx.strokeStyle = '#2e3348'; ctx.lineWidth = 1; ctx.stroke();
+  }
+
+  // Orbit trail
+  ctx.beginPath();
+  values.forEach((v, i) => {
+    const h = valHue(v, p);
+    const a = (h/360)*Math.PI*2 - Math.PI/2;
+    const x = cx+R*Math.cos(a), y = cy+R*Math.sin(a);
+    i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+  });
+  ctx.closePath();
+  ctx.strokeStyle = 'rgba(124,106,245,0.3)'; ctx.lineWidth = 1.5; ctx.stroke();
+
+  // Frame dots
+  values.forEach((v, k) => {
+    const h   = valHue(v, p);
+    const a   = (h/360)*Math.PI*2 - Math.PI/2;
+    const x   = cx + R*Math.cos(a), y = cy + R*Math.sin(a);
+    const cur = k === tlStep;
+    ctx.beginPath();
+    ctx.arc(x, y, cur ? 5 : 2.5, 0, Math.PI*2);
+    ctx.fillStyle = `hsl(${h|0},90%,${cur?60:45}%)`;
+    ctx.globalAlpha = cur ? 1 : 0.55;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  });
+
+  // Center label
+  const cur = values[tlStep];
+  const lbl = Array.isArray(cur) ? `(${cur[0]},${cur[1]})` : String(cur);
+  ctx.font = '9px monospace'; ctx.fillStyle = '#e2e4f0'; ctx.textAlign = 'center';
+  ctx.fillText(`k=${tlStep}: ${lbl}`, cx, cy+3);
+
+  phaseRing.classList.add('visible');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// State-vector polar plot  (left canvas)
+// ═══════════════════════════════════════════════════════════════
+
+function drawStateVector(k) {
+  const W = 180, H = 180;
+  stateCanvas.width  = W;
+  stateCanvas.height = H;
+  const ctx = stateCtx;
+  if (!graph?.nodes?.length) { ctx.clearRect(0,0,W,H); return; }
+
+  const frame = graph.frames[k] || {};
+  const p     = graph.nodes.find(n => n.field?.p)?.field?.p || 17;
+  const cx = 90, cy = 90, R = 68;
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0d0f18';
+  ctx.fillRect(0, 0, W, H);
+
+  // Faint concentric rings
+  for (const r of [R*0.35, R*0.7, R]) {
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2);
+    ctx.strokeStyle = r===R ? '#252940' : '#181b28';
+    ctx.lineWidth = r===R ? 1.5 : 1;
+    ctx.stroke();
+  }
+
+  // Axes
+  ctx.strokeStyle = '#1e2235'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(cx-R-10,cy); ctx.lineTo(cx+R+10,cy); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx,cy-R-10); ctx.lineTo(cx,cy+R+10); ctx.stroke();
+
+  // Cardinal labels: 0, π/2, π, 3π/2
+  ctx.fillStyle = '#3a4060'; ctx.font = '8px monospace'; ctx.textAlign='center';
+  ctx.fillText('0',     cx+R+14, cy+3);
+  ctx.fillText('π/2',  cx,       cy-R-13);
+  ctx.fillText('π',    cx-R-14,  cy+3);
+  ctx.fillText('3π/2', cx,       cy+R+13);
+
+  // Tick marks for each field value
+  for (let i = 0; i < p; i++) {
+    const a = (i/p)*Math.PI*2 - Math.PI/2;
+    ctx.beginPath();
+    ctx.moveTo(cx+(R-4)*Math.cos(a), cy+(R-4)*Math.sin(a));
+    ctx.lineTo(cx+(R+2)*Math.cos(a), cy+(R+2)*Math.sin(a));
+    ctx.strokeStyle = '#252940'; ctx.lineWidth = 1; ctx.stroke();
+  }
+
+  // Draw every node as a dot on the ring (angle = value/p * 2π)
+  for (const n of graph.nodes) {
+    const entry = frame[n.name];
+    if (!entry || entry.num == null) continue;
+    const hue = valHue(entry.num, p);
+    if (hue == null) continue;
+    const a   = (hue/360)*Math.PI*2 - Math.PI/2;
+    const nx  = cx + R*Math.cos(a);
+    const ny  = cy + R*Math.sin(a);
+    const sel = n.name === selected;
+
+    if (sel) {
+      // Arrow from center to dot
+      ctx.save();
+      ctx.strokeStyle = `hsl(${hue|0},90%,62%)`;
+      ctx.lineWidth = 2;
+      ctx.shadowColor = `hsl(${hue|0},90%,60%)`;
+      ctx.shadowBlur  = 8;
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(nx, ny); ctx.stroke();
+      // arrowhead
+      const tip = 10, side = 4;
+      const ax  = nx - tip*Math.cos(a), ay = ny - tip*Math.sin(a);
+      ctx.beginPath();
+      ctx.moveTo(nx, ny);
+      ctx.lineTo(ax + side*Math.cos(a+Math.PI/2), ay + side*Math.sin(a+Math.PI/2));
+      ctx.lineTo(ax - side*Math.cos(a+Math.PI/2), ay - side*Math.sin(a+Math.PI/2));
+      ctx.closePath();
+      ctx.fillStyle = `hsl(${hue|0},90%,62%)`; ctx.fill();
+      ctx.restore();
+    }
+
+    ctx.beginPath(); ctx.arc(nx, ny, sel ? 5.5 : 3, 0, Math.PI*2);
+    ctx.fillStyle = `hsl(${hue|0},80%,${sel?65:42}%)`;
+    ctx.globalAlpha = sel ? 1 : 0.75;
+    ctx.fill(); ctx.globalAlpha = 1;
+
+    // Label selected node value
+    if (sel && entry.str) {
+      ctx.fillStyle = `hsl(${hue|0},80%,70%)`;
+      ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
+      const lx = cx + (R+16)*Math.cos(a), ly = cy + (R+16)*Math.sin(a);
+      ctx.fillText(entry.str, lx, ly+3);
+    }
+  }
+
+  // Center dot
+  ctx.beginPath(); ctx.arc(cx, cy, 2.5, 0, Math.PI*2);
+  ctx.fillStyle = '#3a4060'; ctx.fill();
+
+  // Title
+  ctx.fillStyle = '#3a4060'; ctx.font = '8px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`F_${p}  ·  state vector  ·  k=${k}`, cx, H-3);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Phase graph  (right canvas — value vs phase over [0, 2π])
+// ═══════════════════════════════════════════════════════════════
+
+function drawPhaseGraph() {
+  if (!graph?.frames?.length) return;
+
+  // Match CSS pixel dimensions (handles resize)
+  const rect = graphCanvas.parentElement.getBoundingClientRect();
+  const CW   = Math.floor(rect.width)  || 600;
+  const CH   = Math.floor(rect.height) || 180;
+  graphCanvas.width  = CW;
+  graphCanvas.height = CH;
+
+  const ctx    = graphCtx;
+  const frames = graph.frames;
+  const m      = graph.m;
+  const p      = graph.nodes.find(n => n.field?.p)?.field?.p || 17;
+
+  const PL = 28, PR = 10, PT = 14, PB = 26;
+  const GW = CW - PL - PR;
+  const GH = CH - PT - PB;
+
+  ctx.clearRect(0, 0, CW, CH);
+  ctx.fillStyle = '#0d0f18';
+  ctx.fillRect(0, 0, CW, CH);
+
+  // Horizontal grid lines (value axis)
+  const yStep = Math.max(1, Math.ceil(p / 5));
+  ctx.font = '8px monospace'; ctx.textAlign = 'right';
+  for (let v = 0; v <= p; v += yStep) {
+    const y = PT + GH - (v / p) * GH;
+    ctx.strokeStyle = '#181b28'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(PL, y); ctx.lineTo(PL+GW, y); ctx.stroke();
+    ctx.fillStyle = '#3a4060';
+    ctx.fillText(v, PL-3, y+3);
+  }
+
+  // Axes
+  ctx.strokeStyle = '#252940'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(PL, PT);     ctx.lineTo(PL,    PT+GH); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(PL, PT+GH);  ctx.lineTo(PL+GW, PT+GH); ctx.stroke();
+
+  // X-axis ticks: 0, π/2, π, 3π/2, 2π
+  const tickFracs = [0, 0.25, 0.5, 0.75, 1];
+  const tickLabels = ['0', 'π/2', 'π', '3π/2', '2π'];
+  ctx.fillStyle = '#3a4060'; ctx.textAlign = 'center';
+  for (let i = 0; i < tickFracs.length; i++) {
+    const x = PL + tickFracs[i] * GW;
+    ctx.strokeStyle = '#252940'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, PT+GH); ctx.lineTo(x, PT+GH+4); ctx.stroke();
+    ctx.fillText(tickLabels[i], x, CH-2);
+  }
+
+  // Y-axis label
+  ctx.save();
+  ctx.translate(8, PT + GH/2);
+  ctx.rotate(-Math.PI/2);
+  ctx.fillStyle = '#3a4060'; ctx.font = '8px monospace'; ctx.textAlign='center';
+  ctx.fillText('value', 0, 0);
+  ctx.restore();
+
+  // One curve per node
+  for (const n of graph.nodes) {
+    const isSel = n.name === selected;
+    const isComplex = n.field?.is_complex;
+
+    const realVals = frames.map(f => {
+      const e = f[n.name];
+      if (!e || e.num == null) return null;
+      return Array.isArray(e.num) ? e.num[0] : e.num;
+    });
+    if (realVals.every(v => v == null)) continue;
+
+    const imVals = isComplex ? frames.map(f => {
+      const e = f[n.name];
+      return (e && Array.isArray(e.num)) ? e.num[1] : null;
+    }) : null;
+
+    const drawCurve = (vals, dashed) => {
+      const curEntry = frames[tlStep]?.[n.name];
+      const hue = curEntry ? valHue(curEntry.num, p) : null;
+      const col = hue != null
+        ? `hsl(${hue|0},78%,${isSel ? 62 : 40}%)`
+        : '#3a4060';
+
+      ctx.save();
+      ctx.globalAlpha = isSel ? 1 : 0.45;
+      ctx.strokeStyle = col;
+      ctx.lineWidth   = isSel ? 2 : 1;
+      if (dashed) ctx.setLineDash([3,3]);
+
+      // Smooth trigonometric interpolation via DFT
+      const hasNulls = vals.some(v => v == null);
+      ctx.beginPath();
+      if (!hasNulls && m >= 3) {
+        const dft = dftCoeffs(vals);
+        const STEPS = Math.max(160, GW | 0);
+        for (let i = 0; i <= STEPS; i++) {
+          const t = (i / STEPS) * (m - 1);
+          const v = evalDFT(dft, t);
+          const x = PL + (i / STEPS) * GW;
+          const y = PT + GH - (v / p) * GH;
+          i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        }
+      } else {
+        let first = true;
+        vals.forEach((v, ki) => {
+          if (v == null) return;
+          const x = PL + (ki / (m-1 || 1)) * GW;
+          const y = PT + GH - (v / p) * GH;
+          first ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+          first = false;
+        });
+      }
+      ctx.stroke();
+
+      // Discrete sample dots (one per frame)
+      vals.forEach((v, ki) => {
+        if (v == null) return;
+        const x = PL + (ki / (m-1 || 1)) * GW;
+        const y = PT + GH - (v / p) * GH;
+        const fEntry = frames[ki]?.[n.name];
+        const fhue   = fEntry ? valHue(fEntry.num, p) : hue;
+        ctx.beginPath(); ctx.arc(x, y, isSel ? 3 : 1.5, 0, Math.PI*2);
+        ctx.fillStyle = fhue != null ? `hsl(${fhue|0},90%,60%)` : col;
+        ctx.fill();
+      });
+
+      ctx.restore();
+    };
+
+    drawCurve(realVals, false);
+    if (imVals) drawCurve(imVals, true);
+  }
+
+  // Current-k vertical marker
+  const mx = PL + (tlStep / (m-1 || 1)) * GW;
+  ctx.save();
+  ctx.strokeStyle = '#7c6af5'; ctx.lineWidth = 1.5;
+  ctx.setLineDash([4,3]);
+  ctx.beginPath(); ctx.moveTo(mx, PT); ctx.lineTo(mx, PT+GH); ctx.stroke();
+  ctx.restore();
+
+  // Value label for selected node at current k
+  if (selected) {
+    const e = frames[tlStep]?.[selected];
+    if (e?.str) {
+      ctx.fillStyle = '#7c6af5'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'left';
+      ctx.fillText(e.str, mx+3, PT+11);
+    }
+  }
+
+  // Title
+  ctx.fillStyle = '#3a4060'; ctx.font = '8px monospace'; ctx.textAlign = 'right';
+  ctx.fillText('value over phase  [0 → 2π]', PL+GW, PT-2);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DFT trigonometric interpolation (smooth curves)
+// ═══════════════════════════════════════════════════════════════
+
+function dftCoeffs(vals) {
+  const N = vals.length;
+  const re = new Float64Array(N), im = new Float64Array(N);
+  for (let k = 0; k < N; k++) {
+    for (let n = 0; n < N; n++) {
+      const a = -2 * Math.PI * k * n / N;
+      re[k] += vals[n] * Math.cos(a);
+      im[k] += vals[n] * Math.sin(a);
+    }
+  }
+  return { re, im, N };
+}
+
+function evalDFT({ re, im, N }, t) {
+  let sum = 0;
+  for (let k = 0; k < N; k++) {
+    const a = 2 * Math.PI * k * t / N;
+    sum += re[k] * Math.cos(a) - im[k] * Math.sin(a);
+  }
+  return sum / N;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Phasor vector overlay on DAG nodes
+// ═══════════════════════════════════════════════════════════════
+
+function updateVecOverlay(k) {
+  const grp = document.getElementById('vec-overlay');
+  if (!grp) return;
+  grp.innerHTML = '';
+  if (!showVectors || !graph?.frames?.length) return;
+
+  const frame = graph.frames[k % graph.frames.length] || {};
+  const p     = graph.nodes.find(n => n.field?.p)?.field?.p || 17;
+  const R     = NODE_H * 0.40;
+
+  for (const n of graph.nodes) {
+    const pos   = nodePositions[n.name];
+    const entry = frame[n.name];
+    if (!pos || !entry || entry.num == null) continue;
+
+    let angle;
+    if (Array.isArray(entry.num)) {
+      const a = entry.num[0], b = entry.num[1];
+      const ac = a > p / 2 ? a - p : a;
+      const bc = b > p / 2 ? b - p : b;
+      angle = Math.atan2(bc, ac);
+    } else {
+      angle = (entry.num / p) * Math.PI * 2;
+    }
+
+    const hue = valHue(entry.num, p) ?? 200;
+    const col = `hsl(${hue | 0},90%,65%)`;
+    const cx = pos.x, cy = pos.y;
+    // SVG y increases downward; angle=0 → right, π/2 → up
+    const ex = cx + R * Math.cos(angle);
+    const ey = cy - R * Math.sin(angle);
+
+    grp.appendChild(svg('line', {
+      x1: cx, y1: cy, x2: ex, y2: ey,
+      stroke: col, 'stroke-width': 2.5, 'stroke-linecap': 'round',
+      opacity: 0.85,
+    }));
+
+    // Arrowhead
+    const TIP = 8, SIDE = 3.5;
+    const bx = ex - TIP * Math.cos(angle), by = ey + TIP * Math.sin(angle);
+    const pts = [
+      `${ex},${ey}`,
+      `${bx + SIDE * Math.sin(angle)},${by + SIDE * Math.cos(angle)}`,
+      `${bx - SIDE * Math.sin(angle)},${by - SIDE * Math.cos(angle)}`,
+    ].join(' ');
+    grp.appendChild(svg('polygon', { points: pts, fill: col, opacity: 0.85 }));
+  }
+}
+
+function drawViz() {
+  drawStateVector(tlStep);
+  drawPhaseGraph();
+  updateVecOverlay(tlStep);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Timeline
+// ═══════════════════════════════════════════════════════════════
+
+function tlMax() {
+  if (!graph) return 0;
+  return tlMode === 'phase'
+    ? Math.max(0, graph.m - 1)
+    : Math.max(...graph.nodes.map(n => n.layer));
+}
+
+function setStep(k, fromSlider=false) {
+  tlStep = Math.max(0, Math.min(k, tlMax()));
+  if (!fromSlider) tlSlider.value = tlStep;
+  tlLabel.textContent = tlMode === 'phase'
+    ? `k = ${tlStep} / ${tlMax()}`
+    : `layer ${tlStep} / ${tlMax()}`;
+  if (tlMode === 'phase') applyPhaseFrame(tlStep);
+  else                    applyPropStep(tlStep);
+  drawViz();
+}
+
+function initTl() {
+  if (!graph) return;
+  tlSlider.max = tlMax();
+  setStep(0);
+}
+
+function speedMs() { return Math.round(600 / +tlSpeed.value); }
+
+function startPlay() {
+  if (playTimer) clearInterval(playTimer);
+  playing = true; tlPlay.textContent = '⏸';
+  playTimer = setInterval(() => {
+    setStep(tlStep >= tlMax() ? 0 : tlStep + 1);
+  }, speedMs());
+}
+function stopPlay() {
+  playing = false; tlPlay.textContent = '▶︎';
+  if (playTimer) { clearInterval(playTimer); playTimer = null; }
+}
+
+tlPlay.addEventListener('click', () => playing ? stopPlay() : startPlay());
+tlBack.addEventListener('click', () => { stopPlay(); setStep(tlStep === 0 ? tlMax() : tlStep-1); });
+tlFwd.addEventListener('click',  () => { stopPlay(); setStep(tlStep >= tlMax() ? 0 : tlStep+1); });
+tlSlider.addEventListener('input', () => { stopPlay(); setStep(+tlSlider.value, true); });
+tlSpeed.addEventListener('input', () => { if (playing) { stopPlay(); startPlay(); } });
+
+function setMode(m) {
+  tlMode = m; stopPlay();
+  modePhase.classList.toggle('active', m==='phase');
+  modeProp.classList.toggle('active',  m==='prop');
+  phaseRing.classList.remove('visible');
+  if (m === 'prop') resetNodeColors();
+  initTl();
+  if (m === 'phase' && selected) drawPhaseRing(selected);
+}
+modePhase.addEventListener('click', () => setMode('phase'));
+modeProp.addEventListener('click',  () => setMode('prop'));
+
+vecToggle.addEventListener('click', () => {
+  showVectors = !showVectors;
+  vecToggle.classList.toggle('active', showVectors);
+  updateVecOverlay(tlStep);
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Pan + zoom — mouse
+// ═══════════════════════════════════════════════════════════════
+
+dagCtr.addEventListener('mousedown', e => {
+  if (e.button !== 0 || e.target.closest('.node-g')) return;
+  panState = { sx:e.clientX, sy:e.clientY, tx:xf.x, ty:xf.y };
+  dagCtr.classList.add('panning');
+});
+window.addEventListener('mousemove', e => {
+  if (!panState) return;
+  xf.x = panState.tx + (e.clientX - panState.sx);
+  xf.y = panState.ty + (e.clientY - panState.sy);
+  applyXf();
+});
+window.addEventListener('mouseup', () => { panState = null; dagCtr.classList.remove('panning'); });
+
+dagCtr.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = dagCtr.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const d  = e.deltaY > 0 ? 0.88 : 1.13;
+  xf.x = mx + (xf.x - mx)*d;
+  xf.y = my + (xf.y - my)*d;
+  xf.scale *= d;
+  applyXf();
+}, { passive:false });
+
+// ═══════════════════════════════════════════════════════════════
+// Pan + zoom — touch
+// ═══════════════════════════════════════════════════════════════
+
+function touchMid(t) {
+  return {
+    x: (t[0].clientX + t[1].clientX) / 2,
+    y: (t[0].clientY + t[1].clientY) / 2,
+  };
+}
+function touchDist(t) {
+  return Math.hypot(t[1].clientX - t[0].clientX, t[1].clientY - t[0].clientY);
+}
+
+dagCtr.addEventListener('touchstart', e => {
+  if (e.target.closest('.node-g')) return;
+  e.preventDefault();
+  if (e.touches.length === 1) {
+    panState  = { sx:e.touches[0].clientX, sy:e.touches[0].clientY, tx:xf.x, ty:xf.y };
+    pinchState = null;
+  } else if (e.touches.length === 2) {
+    panState = null;
+    const r = dagCtr.getBoundingClientRect();
+    const mid = touchMid(e.touches);
+    pinchState = {
+      dist: touchDist(e.touches),
+      cx: mid.x - r.left, cy: mid.y - r.top,
+      tx: xf.x, ty: xf.y, sc: xf.scale,
+    };
+  }
+}, { passive:false });
+
+dagCtr.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (e.touches.length === 1 && panState) {
+    xf.x = panState.tx + (e.touches[0].clientX - panState.sx);
+    xf.y = panState.ty + (e.touches[0].clientY - panState.sy);
+    applyXf();
+  } else if (e.touches.length === 2 && pinchState) {
+    const d    = touchDist(e.touches);
+    const sc   = (d / pinchState.dist) * pinchState.sc;
+    const r    = dagCtr.getBoundingClientRect();
+    const mid  = touchMid(e.touches);
+    const mx   = mid.x - r.left, my = mid.y - r.top;
+    // scale around midpoint
+    xf.scale = sc;
+    xf.x     = mx + (pinchState.tx - pinchState.cx) * (sc / pinchState.sc) + (pinchState.cx - mx);
+    xf.y     = my + (pinchState.ty - pinchState.cy) * (sc / pinchState.sc) + (pinchState.cy - my);
+    applyXf();
+  }
+}, { passive:false });
+
+dagCtr.addEventListener('touchend', e => {
+  if (e.touches.length < 2) pinchState = null;
+  if (e.touches.length === 0) panState = null;
+});
+
+// Tap on node (touchend with minimal movement)
+let tapStart = null;
+dagCtr.addEventListener('touchstart', e => {
+  if (e.touches.length !== 1) return;
+  tapStart = { x:e.touches[0].clientX, y:e.touches[0].clientY };
+}, { passive:true });
+dagCtr.addEventListener('touchend', e => {
+  if (!tapStart || e.changedTouches.length !== 1) return;
+  const dx = e.changedTouches[0].clientX - tapStart.x;
+  const dy = e.changedTouches[0].clientY - tapStart.y;
+  if (Math.hypot(dx,dy) < 8) {
+    const target = document.elementFromPoint(
+      e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+    const ng = target?.closest('.node-g');
+    if (ng) selectNode(ng.dataset.name);
+    else clearSel();
+  }
+  tapStart = null;
+}, { passive:true });
+
+// ═══════════════════════════════════════════════════════════════
+// Compile
+// ═══════════════════════════════════════════════════════════════
+
+async function compile() {
+  const source = editor.value.trim();
+  if (!source) return;
+  compileBtn.disabled = true;
+  loadingEl.classList.add('active');
+  errBanner.style.display = 'none';
+  stopPlay();
+
+  try {
+    const resp = await fetch('/api/compile', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({source}),
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      errBanner.textContent = data.errors.join('\n');
+      errBanner.style.display = 'block';
+      updateBadges({}, {});
+    } else {
+      graph = data;
+      errBanner.style.display = 'none';
+      clearSel();
+      renderGraph(data.nodes);
+      updateBadges(data.analysis, data.optimization);
+      const hasTl = data.frames?.length > 1;
+      $('timeline').style.display = hasTl ? '' : 'none';
+      vizPanel.classList.toggle('visible', hasTl);
+      if (hasTl) { setMode(tlMode); drawViz(); }
+    }
+  } catch(e) {
+    errBanner.textContent = 'Network error: ' + e.message;
+    errBanner.style.display = 'block';
+  } finally {
+    compileBtn.disabled = false;
+    loadingEl.classList.remove('active');
+  }
+}
+
+compileBtn.addEventListener('click', compile);
+fitBtn.addEventListener('click', () => {
+  if (graph?.nodes.length) fitView(layoutNodes(graph.nodes), graph.nodes);
+});
+editor.addEventListener('keydown', e => {
+  if ((e.ctrlKey||e.metaKey) && e.key==='Enter') { e.preventDefault(); compile(); }
+  if (e.key==='Tab') {
+    e.preventDefault();
+    const s = editor.selectionStart;
+    editor.value = editor.value.slice(0,s)+'    '+editor.value.slice(editor.selectionEnd);
+    editor.selectionStart = editor.selectionEnd = s+4;
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Examples
+// ═══════════════════════════════════════════════════════════════
+
+fetch('/api/examples').then(r=>r.json()).then(d => {
+  for (const f of d.examples) {
+    const o = document.createElement('option');
+    o.value = f; o.textContent = f; exSel.appendChild(o);
+  }
+}).catch(()=>{});
+
+exSel.addEventListener('change', async () => {
+  const v = exSel.value; if (!v) return;
+  const data = await fetch(`/api/example/${v}`).then(r=>r.json()).catch(()=>null);
+  if (data?.source) { editor.value = data.source; compile(); }
+  exSel.value = '';
+});
+
+window.addEventListener('resize', () => { if (vizPanel.classList.contains('visible')) drawPhaseGraph(); });
+
+// ═══════════════════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════════════════
+
+editor.value = `-- Phasor interference in F_{7²}
+-- Slide Phase 0-5 to watch constructive/destructive
+-- interference. |A+B|² cycles [3,6,5] with period 3.
+
+cfield(7);
+
+cembed(0, 1);
+cembed(2, 0);
+
+add(cembed_1, cembed_2) as sum_AB;
+conj(cembed_1) as A_bar;
+
+magsq(sum_AB) as power;
+magsq(cembed_1) as power_A;
+magsq(cembed_2) as power_B;
+
+measure(power,   mod_p) as combined;
+measure(power_A, mod_p) as solo_A;
+measure(power_B, mod_p) as solo_B;`;
+
+compile();
+</script>
+</body>
+</html>
