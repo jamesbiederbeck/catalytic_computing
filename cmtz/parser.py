@@ -4,7 +4,8 @@ Produces a typed AST. Rejects unknown IDs and enforces literal
 parameters where required.
 
 Grammar:
-  program      ::= field_decl? statement*
+  program      ::= version_decl? field_decl? statement*
+  version_decl ::= 'version' '(' INT ')' ';'
   field_decl   ::= 'field' '(' INT ',' INT ')' ';'
                  | 'field' '(' INT ')' ';'
   statement    ::= embed_stmt | rotate_stmt | compose_stmt
@@ -16,9 +17,10 @@ from __future__ import annotations
 
 from .lexer import Token, LexError
 from .ast_nodes import (
-    Program, FieldDecl, CFieldDecl, EmbedStmt, RotateStmt, ComposeStmt,
-    RootsStmt, CycloPhiStmt, MatPowStmt, CatalyticStmt, InterruptStmt,
-    MeasureStmt, AddStmt, CEmbedStmt, ConjStmt, MagSqStmt, ASTNode,
+    Program, VersionDecl, FieldDecl, CFieldDecl, EmbedStmt, RotateStmt,
+    ComposeStmt, RootsStmt, CycloPhiStmt, MatPowStmt, CatalyticStmt,
+    InterruptStmt, MeasureStmt, AddStmt, CEmbedStmt, ConjStmt, MagSqStmt,
+    ASTNode,
 )
 
 
@@ -83,6 +85,10 @@ class Parser:
     def parse(self) -> Program:
         """Parse a complete program."""
         loc = self.peek()
+        version_decl = None
+        if self.at_keyword('version'):
+            version_decl = self._parse_version_decl()
+
         field_decl = None
         if self.at_keyword('field'):
             field_decl = self._parse_field_decl()
@@ -94,11 +100,22 @@ class Parser:
             stmts.append(self._parse_statement())
 
         return Program(
+            version_decl=version_decl,
             field_decl=field_decl,
             statements=stmts,
             line=loc.line,
             col=loc.col,
         )
+
+    # ── Version pragma ───────────────────────────────────────────────────
+
+    def _parse_version_decl(self) -> VersionDecl:
+        tok = self.advance()  # consume 'version'
+        self.expect('LPAREN')
+        n = self.expect_int()
+        self.expect('RPAREN')
+        self.expect('SEMI')
+        return VersionDecl(n=n, line=tok.line, col=tok.col)
 
     # ── Field declaration ────────────────────────────────────────────────
 

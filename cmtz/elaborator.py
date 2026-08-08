@@ -13,8 +13,9 @@ The elaborator:
 from __future__ import annotations
 
 from .ast_nodes import (
-    Program, FieldDecl, CFieldDecl, RootsStmt, MatPowStmt,
-    CatalyticStmt, InterruptStmt, CEmbedStmt, ASTNode,
+    Program, FieldDecl, CFieldDecl, EmbedStmt, RotateStmt, ComposeStmt,
+    RootsStmt, CycloPhiStmt, MatPowStmt, CatalyticStmt, InterruptStmt,
+    MeasureStmt, AddStmt, CEmbedStmt, ConjStmt, MagSqStmt, ASTNode,
 )
 from .field import IRField, compute_working_field, find_nonresidue
 
@@ -25,17 +26,82 @@ class ElaborationError(Exception):
     pass
 
 
+# Spec revision each construct was introduced in (§4 grammar history).
+# Kept separate from package semver (see cmtz/__init__.py): v1->v2 was the
+# only DSL-breaking transition, v2->v3 and v3->v4 were purely additive, so
+# this registry is just "earliest spec label that accepts this construct" —
+# it does not imply a major/minor split on its own.
+CONSTRUCT_MIN_VERSION: dict[type, int] = {
+    FieldDecl: 2,
+    EmbedStmt: 2,
+    RotateStmt: 2,
+    ComposeStmt: 2,
+    RootsStmt: 2,
+    CycloPhiStmt: 2,
+    MatPowStmt: 2,
+    CatalyticStmt: 2,
+    MeasureStmt: 2,
+    InterruptStmt: 3,
+    CFieldDecl: 4,
+    AddStmt: 4,
+    CEmbedStmt: 4,
+    ConjStmt: 4,
+    MagSqStmt: 4,
+}
+
+MIN_SUPPORTED_VERSION = 2  # v1's cyclo()/cyclo_poly() lexicon no longer parses
+MAX_SUPPORTED_VERSION = 4  # bump when IRMul / v5 ships
+
+
 class Elaborator:
     """Resolve field parameters and validate algebraic consistency."""
 
     def __init__(self):
         self.ir_field: IRField | None = None
+        self.version: int = MAX_SUPPORTED_VERSION
 
     def elaborate(self, program: Program) -> Program:
         """Elaborate a parsed AST: resolve fields, validate constraints."""
+        self._resolve_version(program)
         self._resolve_field(program.field_decl)
         self._validate_statements(program.statements)
         return program
+
+    def _resolve_version(self, program: Program) -> None:
+        """Resolve the optional version(n) pragma and check every construct
+        in the program against it. Absent a pragma, any supported version's
+        constructs are accepted (current, pre-pragma behavior)."""
+        decl = program.version_decl
+        if decl is None:
+            self.version = MAX_SUPPORTED_VERSION
+            return
+
+        if not (MIN_SUPPORTED_VERSION <= decl.n <= MAX_SUPPORTED_VERSION):
+            raise ElaborationError(
+                f"version({decl.n}): unsupported — this compiler supports "
+                f"spec revisions {MIN_SUPPORTED_VERSION}..{MAX_SUPPORTED_VERSION} "
+                f"(line {decl.line})"
+            )
+        self.version = decl.n
+
+        if program.field_decl is not None:
+            self._check_construct_version(program.field_decl)
+        self._check_statements_version(program.statements)
+
+    def _check_statements_version(self, stmts: list[ASTNode]) -> None:
+        for stmt in stmts:
+            self._check_construct_version(stmt)
+            if isinstance(stmt, (CatalyticStmt, InterruptStmt)):
+                self._check_statements_version(stmt.body)
+
+    def _check_construct_version(self, node: ASTNode) -> None:
+        min_version = CONSTRUCT_MIN_VERSION.get(type(node))
+        if min_version is not None and min_version > self.version:
+            raise ElaborationError(
+                f"{type(node).__name__} requires version >= {min_version}, "
+                f"but program declares version({self.version}) "
+                f"(line {node.line})"
+            )
 
     def _resolve_field(self, decl: FieldDecl | CFieldDecl | None) -> None:
         """Resolve field(p, q) or cfield(p, q) declaration into an IRField."""

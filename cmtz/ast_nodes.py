@@ -34,6 +34,18 @@ class ASTNode:
 
 
 @dataclass
+class VersionDecl(ASTNode):
+    """version(n); — declares the target spec revision (2, 3, or 4).
+
+    Optional; if absent, the compiler accepts constructs from any spec
+    revision it supports (current behavior, unchanged). If present, any
+    construct introduced in a later spec revision is a compile error —
+    see Elaborator.SPEC_REVISION_OF and elaborator._check_version().
+    """
+    n: int = 0
+
+
+@dataclass
 class FieldDecl(ASTNode):
     """field(p, q); — declares the arithmetic field for this program."""
     p: int = 0
@@ -155,6 +167,7 @@ class MagSqStmt(ASTNode):
 
 @dataclass
 class Program(ASTNode):
-    """Top-level program: optional field declaration + statements."""
+    """Top-level program: optional version pragma + field declaration + statements."""
+    version_decl: Optional[VersionDecl] = None
     field_decl: Optional[FieldDecl | CFieldDecl] = None
     statements: list[ASTNode] = field(default_factory=list)

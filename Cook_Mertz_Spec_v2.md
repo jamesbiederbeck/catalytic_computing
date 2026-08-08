@@ -15,6 +15,48 @@ evaluation with catalytic (restorable) workspace. The Alekseev–Cleve construct
 extends this with a catalytic pebbling method that achieves polynomial runtime for
 TreeEval in O(log^{1+ε} n · log log n) space.
 
+### Spec revisions vs. package semver
+
+The `v1`/`v2`/`v3`/`v4` labels used throughout this document are **spec revisions**, not the
+package's semantic version — they're a different axis. Spec revisions track which DSL
+constructs exist; semver tracks source compatibility. `v1 → v2` renamed/changed DSL constructs
+(`cyclo(n)` → `roots(p)`, `cyclo_poly` → `cyclo_phi(n)`, `IRRotate`'s `theta: float` → `j: int`)
+— a v1 program does not parse under the v2 grammar, so this is the one breaking transition in
+the model's history. `v2 → v3` and `v3 → v4` were purely additive: per their own migration
+tables (§8), "existing v2 programs... compile unchanged" under v3, and "all v3 programs compile
+unchanged" under v4. Mapped onto semver:
+
+| Spec revision | Semver | Compatibility |
+|---|---|---|
+| v1 | 1.0.0 | baseline |
+| v2 | 2.0.0 | **breaking** — renamed/changed constructs |
+| v3 | 2.1.0 | additive — `interrupt {}` only |
+| v4 | 2.2.0 | additive — `cfield`, `add`, `cembed`, `conj`, `magsq` |
+| v5 (`IRMul`, §2.14, PROPOSED) | 2.3.0 | additive by design — mirrors `IRAdd` |
+
+The package version (`cmtz.__version__`) follows the semver column. The `version(n)` DSL pragma
+(§2.0, §4) is keyed to the spec-revision column instead — `n` ∈ {2, 3, 4} — since that's the
+vocabulary this document and the compiler's error messages already use; it is not a semver
+string. See `cmtz/elaborator.py`'s `CONSTRUCT_MIN_VERSION` for the construct → spec-revision
+mapping enforced at compile time.
+
+### 2.0 Version Pragma
+
+- **Operation**: Declares the target spec revision for the program. Optional; if absent, the
+  compiler accepts any construct it supports (current max: v4).
+- **Parameters**: integer spec revision `n`, currently `2 <= n <= 4`
+- **DSL form**: `version(n);` — must be the first statement in the program, before any
+  `field`/`cfield` declaration
+- **Behavior**: every construct in the program (including nested inside `catalytic {}` /
+  `interrupt {}` bodies) is checked against the spec revision it was introduced in
+  (`FieldDecl`/`embed`/`rotate`/`compose`/`roots`/`cyclo_phi`/`matpow`/`catalytic`/`measure` → 2;
+  `interrupt` → 3; `cfield`/`add`/`cembed`/`conj`/`magsq` → 4). Using a construct newer than the
+  declared version is a compile-time `ElaborationError`, e.g. `cembed` under `version(2)` raises
+  "CEmbedStmt requires version >= 4, but program declares version(2)".
+- **Non-goal**: the pragma does not resurrect old *behavior* (e.g. v2's stricter, since-removed
+  catalytic verification semantics) — only which *constructs* are accepted. It is a syntax gate,
+  not a semantics emulator.
+
 ### What v2 fixed
 
 | # | v1 Bug | Impact | v2 Fix |
@@ -294,7 +336,10 @@ via `cfield(p, q)`, verify q ≥ p² (so that F_{p²} multiplications stay in ra
 ## 4. DSL v4 Syntax
 
 ```bnf
-program        ::= field_decl? statement*
+program        ::= version_decl? field_decl? statement*
+
+version_decl   ::= 'version' '(' n=INT ')' ';'                 -- must precede field_decl; §2.0
+                                                                -- n in {2,3,4}; optional
 
 field_decl     ::= 'field'  '(' p=INT ',' q=INT ')' ';'
                  | 'field'  '(' p=INT ')' ';'                 -- q defaults to p

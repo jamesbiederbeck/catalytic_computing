@@ -32,6 +32,7 @@ TOKEN_SPEC: list[tuple[str, str]] = [
     ('MODE',        r'\b(?:real|imag|mag|trace|mod_p)\b'),
 
     # Keywords — MUST be before ID
+    ('KW_VERSION',  r'\bversion\b'),
     ('KW_CFIELD',   r'\bcfield\b'),
     ('KW_FIELD',    r'\bfield\b'),
     ('KW_EMBED',    r'\bembed\b'),

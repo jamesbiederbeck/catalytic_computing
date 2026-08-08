@@ -134,6 +134,91 @@ class TestElaborator:
         assert elab.ir_field.p == 7
 
 
+# ── Version pragma tests ─────────────────────────────────────────────────────
+
+class TestVersionPragma:
+    def test_no_pragma_accepts_v4_construct(self):
+        """Absent a version() pragma, current (max supported) behavior holds."""
+        src = "cfield(7); cembed(0, 1);"
+        tokens = tokenize(src)
+        ast = Parser(tokens).parse()
+        elab = Elaborator()
+        elab.elaborate(ast)  # should not raise
+        assert elab.version == 4
+
+    def test_pragma_matching_version_passes(self):
+        src = "version(2); field(7); embed(0, 0);"
+        tokens = tokenize(src)
+        ast = Parser(tokens).parse()
+        elab = Elaborator()
+        elab.elaborate(ast)
+        assert elab.version == 2
+
+    def test_v4_construct_rejected_under_v2_pragma(self):
+        src = "version(2); cfield(7); cembed(0, 1);"
+        tokens = tokenize(src)
+        ast = Parser(tokens).parse()
+        elab = Elaborator()
+        with pytest.raises(ElaborationError, match="requires version >= 4"):
+            elab.elaborate(ast)
+
+    def test_v3_construct_rejected_under_v2_pragma(self):
+        src = """
+        version(2);
+        field(7);
+        embed(0, 0);
+        interrupt {
+            rotate(embed_0, embed_1, 1);
+        } restoring (r0);
+        """
+        tokens = tokenize(src)
+        ast = Parser(tokens).parse()
+        elab = Elaborator()
+        with pytest.raises(ElaborationError, match="requires version >= 3"):
+            elab.elaborate(ast)
+
+    def test_v3_construct_nested_in_catalytic_rejected(self):
+        """Version check must recurse into catalytic {} bodies too, not
+        just interrupt {} — both share the AST body-walking helper."""
+        src = """
+        version(2);
+        field(7);
+        embed(0, 0);
+        catalytic {
+            interrupt {
+                rotate(embed_0, embed_1, 1);
+            } restoring (r0);
+        } restoring (r0);
+        """
+        tokens = tokenize(src)
+        ast = Parser(tokens).parse()
+        elab = Elaborator()
+        with pytest.raises(ElaborationError, match="requires version >= 3"):
+            elab.elaborate(ast)
+
+    def test_unsupported_version_rejected(self):
+        for bad in (0, 1, 5):
+            tokens = tokenize(f"version({bad}); field(7);")
+            ast = Parser(tokens).parse()
+            elab = Elaborator()
+            with pytest.raises(ElaborationError, match="unsupported"):
+                elab.elaborate(ast)
+
+    def test_pragma_must_precede_field_decl(self):
+        """version() is only recognized as the leading pragma; anywhere
+        else it's not a valid statement, so parsing fails outright."""
+        from cmtz.parser import ParseError
+        tokens = tokenize("field(7); version(2);")
+        with pytest.raises(ParseError, match="KW_VERSION"):
+            Parser(tokens).parse()
+
+    def test_end_to_end_compile_rejects_via_compile_program(self):
+        src = "version(2); cfield(7); cembed(0, 1);"
+        result = compile_program(src, backend='python')
+        assert not result.ok
+        assert any("requires version >= 4" in e for e in result.errors)
+
+
 # ── Catalytic verification tests ─────────────────────────────────────────────
 
 class TestCatalyticVerify:
