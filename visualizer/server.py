@@ -6,7 +6,7 @@ Serves the SPA and exposes a /api/compile endpoint.
 Binds to 0.0.0.0 so the whole LAN can reach it.
 
 Usage:
-    cd /home/victor/code/cook_mertz
+    cd into the repo root
     uv run python visualizer/server.py [--port 8765]
 """
 

@@ -6,7 +6,7 @@ Demonstrates v4 operations: cfield, cembed, conj, magsq, add.
 The Python backend handles complex registers as (re, im) tuples.
 
 Usage:
-    cd /home/victor/code/cook_mertz
+    cd into the repo root
     uv run python examples/06_phasor_runner.py
 """
 

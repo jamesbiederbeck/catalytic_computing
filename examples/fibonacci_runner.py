@@ -6,7 +6,7 @@ The DSL handles structure, cost verification, and static analysis.
 The runner provides the actual Fibonacci matrix and extracts results.
 
 Usage:
-    cd /home/victor/code/cook_mertz
+    cd into the repo root
     python examples/fibonacci_runner.py
 """
 

@@ -19,8 +19,7 @@ Static analysis verifies field consistency, detects cycles, tracks catalytic reg
 ## Quick start
 
 ```bash
-uv venv
-uv add sympy
+uv sync
 uv run pytest cmtz/tests/        # run all tests
 uv run python examples/fibonacci_pure_runner.py
 uv run python examples/run_all.py

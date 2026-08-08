@@ -3,7 +3,7 @@
 Run all .cmtz examples through the compiler and verify expected outputs.
 
 Usage:
-    cd /home/victor/code/cook_mertz
+    cd into the repo root
     uv run python examples/run_all.py
 """
 

@@ -7,7 +7,7 @@ computation using only embed + add, without any external matrix
 or Python-side glue code.
 
 Usage:
-    cd /home/victor/code/cook_mertz
+    cd into the repo root
     uv run python examples/fibonacci_pure_runner.py
 """
 
