@@ -5,7 +5,7 @@ from cmtz.field import IRField, find_nonresidue, add_Fp2, conj_Fp2, magsq_Fp2
 from cmtz.ir_nodes import (
     IRProgram, IRNode, IREmbed, IRRotate, IRCompose,
     IRRegion, IRCatalyticRegion, CycleError,
-    IRAdd, IRComplexEmbed, IRConjugate, IRMagnitudeSq,
+    IRAdd, IRComplexEmbed, IRConjugate, IRMagnitudeSq, IRPoly,
 )
 from cmtz.analysis.cycle_check import (
     check_cycles, check_cycles_diagnostic, find_back_edges,
@@ -316,6 +316,31 @@ class TestComplexFieldConsistency:
         msq = IRMagnitudeSq(name="msq", ir_field=real_field, parents=[cembed])
         prog.add_node(cembed)
         prog.add_node(msq)
+        check_field_consistency(prog)  # should not raise
+
+    def test_poly_rejects_complex_parent(self):
+        """IRPoly on a complex parent must be rejected — Horner eval is only
+        defined over F_p/F_q; the Python backend would otherwise silently
+        misevaluate it (int * (re, im) tuple does sequence repetition)."""
+        from cmtz.analysis.field_consistency import check_field_consistency, FieldMismatchError
+        c = find_nonresidue(7)
+        cfield = IRField(p=7, q=53, c=c)
+        prog = IRProgram(ir_field=cfield)
+        cembed = IRComplexEmbed(name="ce", ir_field=cfield, re_psi=0, im_psi=1)
+        poly = IRPoly(name="poly", ir_field=cfield, parents=[cembed], coeffs=[1, 2])
+        prog.add_node(cembed)
+        prog.add_node(poly)
+        with pytest.raises(FieldMismatchError, match="real"):
+            check_field_consistency(prog)
+
+    def test_poly_real_parent_passes(self):
+        from cmtz.analysis.field_consistency import check_field_consistency
+        real_field = IRField(p=7, q=7)
+        prog = IRProgram(ir_field=real_field)
+        embed = IREmbed(name="e", ir_field=real_field, index=0, psi=0)
+        poly = IRPoly(name="poly", ir_field=real_field, parents=[embed], coeffs=[1, 2])
+        prog.add_node(embed)
+        prog.add_node(poly)
         check_field_consistency(prog)  # should not raise
 
     def test_conj_requires_complex_field(self):

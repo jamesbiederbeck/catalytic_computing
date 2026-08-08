@@ -60,6 +60,25 @@ additive gates. The v4 model adds addition and the complex extension F_{p²} so 
 phasors (complex amplitudes) can be computed exactly in modular arithmetic. All
 operations remain branch-free and integer; no floating point is introduced.
 
+### What v5 changes (PROPOSED — not yet implemented)
+
+| # | v4 Limitation | v5 Change |
+|---|---|---|
+| 1 | No register×register multiply. `IRRotate` scales by a compile-time exponent `j`; `IRPoly` evaluates compile-time coefficients; `IRAdd` is the *only* primitive that combines two dynamically-computed registers, and it adds rather than multiplies | New `IRMul` primitive; `mul(a, b) as name` DSL form |
+| 2 | Catalytic verifier (§6.3) has no rule for a hypothetical register×register multiply | New rule: `IRMul` writing to a catalytic-region register is treated as destructive by default (§6.3 update) |
+
+**Conceptual basis (v5, proposed).** Every existing multiplicative primitive scales a
+register by a value fixed at *compile time* (a root-of-unity exponent, or polynomial
+coefficients). This matches Cook–Mertz tree evaluation, where the circuit structure is
+static. But algorithms whose messages are themselves computed at runtime and then
+multiplied pairwise — e.g. Fourier-domain convolution steps in NTT-based polynomial
+multiplication, or the variable-to-factor product step in belief propagation on a factor
+graph — need a primitive that multiplies two *IR node outputs* together, not a node and
+a constant. `IRMul` closes that gap, mirroring how v4's `IRAdd` closed the analogous gap
+for addition. The underlying arithmetic already exists: `mul_Fp2` (§3.4) has been present
+in `field.py` since v4, used internally by the GLSL backend's `mul_fp2` helper (§7.4);
+v5 is primarily about exposing it as a first-class DAG node rather than inlining it.
+
 
 ## 2. Core Primitives
 
@@ -177,6 +196,33 @@ operations remain branch-free and integer; no floating point is introduced.
 - **Cost**: 3 basic instructions (two squares, one add, one mod p)
 - **Physical interpretation**: measures the power of a phasor signal
 
+### 2.14 Multiplication (Hadamard Gate) — PROPOSED v5
+
+- **Operation**: Compute (a·b) mod p, or mul_Fp2(a, b) mod p for complex registers
+- **Parameters**: two source registers of the same type (both F_p or both F_{p²})
+- **IR Node**: `IRMul(parents=[a, b], ir_field: IRField)`
+- **Cost**: 1 basic instruction for F_p (a single modular multiply); 4 basic
+  instructions for F_{p²} (the Karatsuba-style `mul_Fp2` cross terms, §3.4).
+  0 recursive calls, 1 output register — same accounting shape as `IRAdd` (§2.10).
+- **DSL form**: `mul(a, b) as name;`
+- **Restriction**: both parents must share the same `IRField` (same p, q, and c).
+  Mixing real and complex registers at `IRMul` is a field consistency error —
+  identical rule to `IRAdd` (§6.5).
+- **Distinction from existing multiplicative primitives**: `IRRotate` (§2.2) and
+  `IRPoly` (§2.4) both multiply a register by a value fixed at *compile time*
+  (a root exponent, or polynomial coefficients). `IRMul` is the first primitive
+  where **both** operands are references to other IR nodes — i.e. both values are
+  determined at runtime. This is required for algorithms where two dynamically
+  computed quantities must be combined multiplicatively (e.g. NTT convolution
+  steps, or the variable-to-factor product step in belief propagation).
+- **Catalytic interaction (§6.3)**: unlike `IRRotate`, whose m-fold application
+  cancels by root-of-unity symmetry, a bare `IRMul` write to a catalytic register
+  has no automatic net-zero guarantee. The verifier must treat it like `IREmbed` —
+  a destructive write — unless a later `IRMul` by the modular inverse is present
+  in the same region to restore the original value. v5 does not propose automatic
+  inverse-pairing detection; until that exists, `IRMul` targeting a catalytic
+  register inside `interrupt {}` should be flagged as a violation.
+
 
 ## 3. Field Arithmetic
 
@@ -259,6 +305,7 @@ statement      ::= embed_stmt | rotate_stmt | compose_stmt
                  | measure_stmt | roots_stmt | cyclo_phi_stmt
                  | matpow_stmt | catalytic_stmt | interrupt_stmt
                  | add_stmt | cembed_stmt | conj_stmt | magsq_stmt
+                 | mul_stmt                                        -- PROPOSED v5
 
 roots_stmt     ::= 'roots' '(' p=INT ')' 'as' ID ';'
 cyclo_phi_stmt ::= 'cyclo_phi' '(' n=INT ')' 'as' ID ';'
@@ -284,6 +331,10 @@ conj_stmt      ::= 'conj' '(' a=ID ')' 'as' ID ';'
 
 magsq_stmt     ::= 'magsq' '(' a=ID ')' 'as' ID ';'
                    -- Requires complex input. Output is real (F_p).
+
+mul_stmt       ::= 'mul' '(' a=ID ',' b=ID ')' 'as' ID ';'         -- PROPOSED v5
+                   -- Both operands must share the same IRField.
+                   -- Same field-consistency restriction as add_stmt.
 
 measure_stmt   ::= 'measure' '(' id=ID ',' mode=MODE ')' 'as' var=ID ';'
 MODE           ::= 'real' | 'imag' | 'mag' | 'trace' | 'mod_p'
@@ -355,6 +406,7 @@ DSL source (.cmtz)
        │          cembed(r,i)  → IRComplexEmbed     (v4)
        │          conj(a)      → IRConjugate        (v4)
        │          magsq(a)     → IRMagnitudeSq      (v4)
+       │          mul(a,b)     → IRMul              (PROPOSED v5)
        ▼
   [Static Analysis]
        ├── Cycle check (topological sort)
@@ -406,6 +458,11 @@ have net-zero symbolic delta after the inner computation. Current checks:
   by root-of-unity cancellation. Treated as net-zero symbolically.
 - **Composition (IRCompose)**: safe if both sub-programs are clean
   (Lemma 2.1 guarantees this for correctly structured programs).
+- **Multiplication (IRMul) — PROPOSED v5**: unlike `IRRotate`, a bare `IRMul`
+  writing to a catalytic register has no automatic cancellation — there is no
+  m-fold pattern that guarantees the net effect is the identity. Treated the
+  same as `IREmbed`: a definite violation, unless paired with a later `IRMul`
+  by the modular inverse within the same region (not automatically detected).
 
 The Cook-Mertz add/subtract restore pattern remains the canonical proof
 of compliance for more complex handlers:
@@ -417,8 +474,9 @@ of compliance for more complex handlers:
 
 Extends §6.2 with type rules for the F_{p²}/F_p boundary:
 
-- **Same-field rule**: all binary operands (`IRAdd`, `IRRotate`) must share the same
-  `IRField` exactly (same p, q, and c). Mixing F_p and F_{p²} at any binary op is an error.
+- **Same-field rule**: all binary operands (`IRAdd`, `IRRotate`, and — PROPOSED v5 —
+  `IRMul`) must share the same `IRField` exactly (same p, q, and c). Mixing F_p and
+  F_{p²} at any binary op is an error.
 - **Complex-only ops**: `IRConjugate` and `IRComplexEmbed` require `ir_field.is_complex`.
   Using them in a real-field program is a field consistency error.
 - **Type-lowering at IRMagnitudeSq**: the single allowed cross-type boundary. Input field
@@ -427,6 +485,17 @@ Extends §6.2 with type rules for the F_{p²}/F_p boundary:
 - **IRMeasure on complex registers**: allowed for `real` and `imag` modes (extracts
   individual components); not allowed for `mod_p` on a complex register directly —
   use `magsq` first.
+- **IRPoly requires a real parent**: `IRPoly`'s Horner evaluation (§3.3) is defined
+  only over F_p — `horner_eval_Fq` performs `result·x + c` assuming `x` is a plain
+  int. A complex (`F_{p²}`) parent is currently **unchecked and unsafe**: nothing in
+  §6.2/§6.5 rejects it, and the Python backend's `int * tuple` does Python sequence
+  repetition rather than raising, silently producing garbage instead of a type error.
+  Until complex Horner evaluation (`mul_Fp2`-based) is specified, an `IRPoly` node
+  must require `parent.ir_field.is_complex == False`. This is the actual blocker for
+  "scale a phasor message by a compile-time-real coefficient" (e.g. a Bessel
+  coefficient `I_k(βJ)` scaling a Fourier-domain phasor message) — not `IRMul`'s
+  same-field rule, since `IRMul`'s operands in that use case (two runtime messages)
+  are already same-field by construction.
 
 ### 6.4 Cost Propagation
 
@@ -456,6 +525,11 @@ at runtime — the distinction is purely a static analysis concern.
 The `registers` dict holds either `int` (real) or `(int, int)` (complex) values —
 dispatch is by `isinstance(val, tuple)`.
 
+**v5 complex support (PROPOSED)**: `IRMul` dispatches to plain `(a * b) % p` for real
+registers, `mul_Fp2` for complex — `mul_Fp2` already exists in `field.py` (added in v4
+as scaffolding for other Fp2 ops) and would simply be exposed at the IR level for the
+first time.
+
 ### 7.2 PyTorch Backend
 
 Uses `torch.int64` tensors with explicit `% p` after every
@@ -481,6 +555,10 @@ modular arithmetic; SSBO for root table.
 New GLSL helpers `add_fp2`, `mul_fp2`, `conj_fp2`, `magsq_fp2` are emitted as
 inlined functions alongside the existing `mul_mod_p`/`add_mod_p` helpers.
 `IRMagnitudeSq` output is a `uint` (real), ending the `uvec2` chain.
+
+**v5 (PROPOSED)**: `mul_fp2`/`mul_mod_p` are already emitted per v4 (used internally
+by `magsq_fp2`'s squaring); v5 would simply call them wherever an `IRMul` node
+appears in the DAG, the same way `add_fp2`/`add_mod_p` are already called for `IRAdd`.
 
 
 ## 8. Migration
@@ -528,6 +606,18 @@ To opt back into strict verification, rename the relevant blocks to
 
 All v3 programs compile unchanged under v4. New keywords (`cfield`, `add`, `cembed`,
 `conj`, `magsq`) are only needed for complex/additive programs.
+
+### v4 → v5 (PROPOSED — not yet implemented)
+
+| v4 construct | v5 equivalent | Notes |
+|---|---|---|
+| *(no equivalent)* | `mul(a, b) as name` | Register×register multiply, real or complex; the missing counterpart to `IRAdd` |
+| `IRField(p, q, c=None)` | unchanged | No new field parameters needed |
+| §6.3 catalytic checks (`IREmbed`, `IRRotate`, `IRCompose`) | + `IRMul` rule | `IRMul` on a catalytic register is destructive by default, unlike `IRRotate` |
+
+All v4 programs would compile unchanged under v5. The new keyword (`mul`) is only
+needed by programs that combine two runtime-computed registers multiplicatively —
+e.g. NTT-style convolution or belief-propagation message products.
 
 
 ## 9. References

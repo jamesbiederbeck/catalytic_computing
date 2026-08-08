@@ -7,12 +7,16 @@ allowed by the type rules in §6.5.
 Additionally:
   - IRConjugate and IRComplexEmbed require ir_field.is_complex == True
   - Mixing real and complex parents at IRAdd is an error
+  - IRPoly requires a real (non-complex) parent — Horner evaluation is only
+    defined over F_p/F_q; a complex parent would silently misbehave in the
+    Python backend (int * (re, im) tuple performs sequence repetition, not
+    arithmetic) rather than raising
 """
 
 from __future__ import annotations
 
 from ..ir_nodes import (
-    IRProgram, IRNode, IRMagnitudeSq, IRConjugate, IRComplexEmbed,
+    IRProgram, IRNode, IRMagnitudeSq, IRConjugate, IRComplexEmbed, IRPoly,
 )
 
 
@@ -27,10 +31,24 @@ def check_field_consistency(prog: IRProgram) -> None:
       - A node with a parent in a different field (same-field rule)
       - IRMagnitudeSq input not in a complex field
       - IRConjugate / IRComplexEmbed with a non-complex field
+      - IRPoly with a complex parent
     """
     for name, node in prog.topo_order():
         if node.ir_field is None:
             continue
+
+        # IRPoly: Horner evaluation is undefined over F_{p^2} — reject a
+        # complex parent here rather than letting the backend silently
+        # misevaluate it (int * tuple sequence repetition).
+        if isinstance(node, IRPoly):
+            for parent in node.parents:
+                if parent.ir_field is None:
+                    continue
+                if parent.ir_field.is_complex:
+                    raise FieldMismatchError(
+                        f"IRPoly '{name}' requires a real input, but parent "
+                        f"'{parent.name}' has complex field {parent.ir_field}"
+                    )
 
         # IRMagnitudeSq: cross-type boundary — check input is complex
         if isinstance(node, IRMagnitudeSq):
