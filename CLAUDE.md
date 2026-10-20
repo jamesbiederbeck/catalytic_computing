@@ -40,7 +40,8 @@ uv run python examples/fpga/uart_check.py 08_ntt_butterfly.cmtz --basic
 
 # cmtz-core (reusable processor): generate the project, then check it on the board
 uv run python examples/fpga/build_projects.py <dir> --core
-uv run python examples/fpga/core_run.py [--quick]
+uv run python examples/fpga/core_run.py [--quick] [--only examples sweeps interrupts projection soundness]
+uv run python examples/fpga/projection_bench.py [--board]
 ```
 
 The Verilog simulation tests need `iverilog`/`vvp` on `PATH` and skip without them. The `tang-nano-20k` playground repo's `env.sh` puts them there along with apio's yosys, nextpnr and openFPGALoader (`source` it first).
@@ -123,7 +124,9 @@ A fixed processor per field (`cmtz/isa/`) instead of a circuit per program. `enc
 - **Run contract:** `G` / `Machine.start()` resets control state only; R, X and data memory keep their contents between runs. Programs must not read what neither they nor the host wrote; tests run with `Machine.scramble()` to check that.
 - **Allocation:** the compiler uses R1..R23; R24..R31 and X4..X15 belong to the library. An interrupt handler's registers are disjoint from everything main uses.
 - **Catalytic verification on machine code:** `analysis/isa_catalytic.py` checks the allocated handler (straight-line, writes only scratch and borrowed registers, linear ops on borrowed ones, net affine map over all registers is the identity). It runs inside `emit_isa`. The name-based `catalytic_verify.py` says nothing about allocated code.
-- **Testbench guards:** the core testbench runs ~70 cases back to back on one core (state carried, as on the board); mutation tests in `test_isa_core.py` prove it can fail. Interrupt trigger points are retired-instruction counts (`irq_at`), matched in the testbench at instruction boundaries.
+- **Testbench guards:** the core testbench runs ~70 cases back to back on one core (state carried, as on the board); mutation tests in `test_isa_core.py` prove it can fail. Interrupt trigger points are retired-instruction counts (`irq_at`), matched in the testbench at instruction boundaries. `Machine.cycles` models the FSM; `CoreCase(check_cycles=True)` checks it against the RTL.
+- **Values outside F_p:** registers are rw bits and can hold anything below q (HORNER, LDI, LD, host `W`), and the ALU is not arithmetic mod p on such operands (its SUB computes 0 - 18 as 12). The simulator raises instead of modelling that, so counterexamples run on the RTL (`test_isa_catalytic.py`) and the board (`core_run.py --only soundness`). `verify_handler` requires every register the handler reads, and every borrowed one, to be unreachable by such values and (unless borrowed) host-written; `CoreLink.run` refuses inputs ≥ p.
+- **Roots-of-unity projection** (`isa/projection.py`): hand-written gate and depth-2 gate-tree programs (direct, projected, clean), checked against `cmtz/projection_oracle.py`, a plain-integer model that must not import cmtz code. `analysis/isa_clean.py` proves clean evaluation on machine code by symbolic execution with polynomial registers (exact on F_p via x^p = x, concrete control flow); `projection.prove()` and `benchmark()` use it. `examples/fpga/projection_bench.py` prints the numbers; `test_benchmark_numbers` pins them.
 
 ## Spec
 

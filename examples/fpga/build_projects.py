@@ -81,7 +81,7 @@ ON_BOARD = {
     "cmtz-phasor-interference", "cmtz-ntt-butterfly", "cmtz-interrupt-handler",
     "cmtz-fermat-little", "cmtz-diffie-hellman", "cmtz-belief-propagation",
     "cmtz-fibonacci", "cmtz-fibonacci-debug", "cmtz-phasor-interference-debug",
-    "cmtz-core",        # core_run.py: 987 of 987 checks, -noalu
+    "cmtz-core",        # core_run.py: 2459 of 2459 checks, -noalu
 }
 
 
@@ -274,7 +274,9 @@ CORE = CoreConfig(17, 19)
 
 
 def core_readme(core: CoreConfig, project: str) -> str:
-    status = ("Checked on the board with `examples/fpga/core_run.py` (987 of 987 checks)."
+    status = ("Checked on the board with `examples/fpga/core_run.py` (2459 of 2459 checks,"
+              " including the roots-of-unity projection programs; see"
+              " `docs/cmtz-projection.md` of this repo)."
               if project in ON_BOARD else "Not loaded on the board.")
     return f"""# {project}
 
