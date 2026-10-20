@@ -12,13 +12,13 @@ from __future__ import annotations
 from .ast_nodes import (
     Program, EmbedStmt, RotateStmt, ComposeStmt, MeasureStmt,
     RootsStmt, CycloPhiStmt, MatPowStmt, CatalyticStmt, InterruptStmt,
-    AddStmt, CEmbedStmt, ConjStmt, MagSqStmt,
+    AddStmt, CEmbedStmt, ConjStmt, MagSqStmt, MulStmt,
     ASTNode,
 )
 from .ir_nodes import (
     IRProgram, IRNode, IREmbed, IRPrimitiveRoots, IRRotate,
     IRPoly, IRMatPow, IRRegion, IRCatalyticRegion, IRCompose, IRMeasure,
-    IRCycloPhiPoly, IRAdd, IRComplexEmbed, IRConjugate, IRMagnitudeSq,
+    IRCycloPhiPoly, IRAdd, IRComplexEmbed, IRConjugate, IRMagnitudeSq, IRMul,
 )
 from .field import IRField
 
@@ -75,6 +75,8 @@ class Lowering:
             return self._lower_conj(stmt)
         elif isinstance(stmt, MagSqStmt):
             return self._lower_magsq(stmt)
+        elif isinstance(stmt, MulStmt):
+            return self._lower_mul(stmt)
         else:
             raise LoweringError(f"Unknown AST node type: {type(stmt).__name__}")
 
@@ -239,6 +241,17 @@ class Lowering:
         a_node = self.program.get_node(stmt.a)
         b_node = self.program.get_node(stmt.b)
         node = IRAdd(
+            name=stmt.name,
+            ir_field=self.ir_field,
+            parents=[a_node, b_node],
+        )
+        self.program.add_node(node)
+        return node
+
+    def _lower_mul(self, stmt: MulStmt) -> IRMul:
+        a_node = self.program.get_node(stmt.a)
+        b_node = self.program.get_node(stmt.b)
+        node = IRMul(
             name=stmt.name,
             ir_field=self.ir_field,
             parents=[a_node, b_node],

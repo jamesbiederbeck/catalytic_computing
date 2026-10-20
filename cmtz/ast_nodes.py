@@ -18,6 +18,10 @@ v4 syntax changes (phasor network support):
   - cembed(re_psi, im_psi) — complex register initialization
   - conj(a) as name — complex conjugate
   - magsq(a) as name — |z|² → F_p
+
+v5 syntax changes:
+  - mul(a, b) as name — multiplicative (Hadamard) gate; register×register,
+    the counterpart to v4's add(a, b)
 """
 
 from __future__ import annotations
@@ -138,6 +142,14 @@ class MeasureStmt(ASTNode):
 @dataclass
 class AddStmt(ASTNode):
     """add(a, b) as name; — additive superposition gate."""
+    a: str = ""
+    b: str = ""
+    name: str = ""
+
+
+@dataclass
+class MulStmt(ASTNode):
+    """mul(a, b) as name; — multiplicative (Hadamard) gate. v5 addition."""
     a: str = ""
     b: str = ""
     name: str = ""

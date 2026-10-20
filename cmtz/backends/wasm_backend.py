@@ -37,7 +37,7 @@ from typing import Optional
 from ..ir_nodes import (
     IRProgram, IRNode, IREmbed, IRPrimitiveRoots, IRRotate,
     IRPoly, IRMatPow, IRMeasure, IRCompose, IRRegion, IRCatalyticRegion,
-    IRCycloPhiPoly, IRAdd, IRComplexEmbed, IRConjugate, IRMagnitudeSq,
+    IRCycloPhiPoly, IRAdd, IRComplexEmbed, IRConjugate, IRMagnitudeSq, IRMul,
 )
 from ..field import IRField, primitive_roots_Fp, to_base
 
@@ -168,7 +168,7 @@ class WatEmitter:
     def _is_complex(self, node: IRNode) -> bool:
         """True iff this node produces a complex (F_{p²}) value."""
         return isinstance(node, (IRComplexEmbed, IRConjugate)) or (
-            isinstance(node, IRAdd) and
+            isinstance(node, (IRAdd, IRMul)) and
             self.field.is_complex and
             any(isinstance(p, (IRComplexEmbed, IRConjugate))
                 for p in node.parents)
@@ -210,6 +210,8 @@ class WatEmitter:
             self._emit_magsq(name, node)
         elif isinstance(node, IRCycloPhiPoly):
             self._emit_cyclo_phi(name, node)
+        elif isinstance(node, IRMul):
+            self._emit_mul(name, node)
 
     def _emit_embed(self, name: str, node: IREmbed) -> None:
         var = self._var_map[name]
@@ -326,6 +328,25 @@ class WatEmitter:
             b = self._parent_var(node, 1)
             self._emit(f'    ;; add (real) -> {name}')
             self._emit(f'    (local.set {var} (call $add_p {a} {b}))')
+
+    def _emit_mul(self, name: str, node: IRMul) -> None:
+        if self._is_complex(node):
+            re_var, im_var = self._var_map[name]   # type: ignore[misc]
+            a = self._parent_var_complex(node, 0)
+            b = self._parent_var_complex(node, 1)
+            c = self.field.c
+            self._emit(f'    ;; mul (complex, F_{{p^2}}, c={c}) -> {name}')
+            self._emit(f'    (local.set {re_var}')
+            self._emit(f'      (call $add_p (call $mul_p {a[0]} {b[0]})')
+            self._emit(f'        (call $mul_p (call $mul_p {a[1]} {b[1]}) (i32.const {c}))))')
+            self._emit(f'    (local.set {im_var}')
+            self._emit(f'      (call $add_p (call $mul_p {a[0]} {b[1]}) (call $mul_p {a[1]} {b[0]})))')
+        else:
+            var = self._var_map[name]
+            a = self._parent_var(node, 0)
+            b = self._parent_var(node, 1)
+            self._emit(f'    ;; mul (real) -> {name}')
+            self._emit(f'    (local.set {var} (call $mul_p {a} {b}))')
 
     def _emit_complex_embed(self, name: str, node: IRComplexEmbed) -> None:
         re_var, im_var = self._var_map[name]   # type: ignore[misc]

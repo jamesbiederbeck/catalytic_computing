@@ -15,6 +15,8 @@ Current checks (§6.3):
   - IRRotate: treated as net-zero (part of the m-fold ω-loop; root-of-
     unity cancellation guarantees restoration after m iterations).
   - IRCompose: safe when both sub-programs are individually clean.
+  - IRMul (v5): treated as destructive by default, like IREmbed — there
+    is no cancellation pattern analogous to IRRotate's m-fold loop.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from ..ir_nodes import (
     IRProgram, IRNode, IRRegion, IRCatalyticRegion, IREmbed, IRRotate,
-    IRCompose, IRMeasure, IRPoly, IRMatPow,
+    IRCompose, IRMeasure, IRPoly, IRMatPow, IRMul,
 )
 
 
@@ -82,6 +84,16 @@ def _trace_deltas(nodes: list[IRNode], catalytic_regs: list[str]) -> list[RegDel
         elif isinstance(node, IRCompose):
             # Safe when sub-programs are clean (Lemma 2.1).
             pass
+
+        elif isinstance(node, IRMul):
+            # Unlike IRRotate, a bare multiply has no m-fold cancellation
+            # pattern — there is no guarantee the net effect is the
+            # identity. Treat a write to a listed catalytic register as
+            # destructive by default, mirroring the IREmbed clobber rule
+            # (§6.3). Not automatically paired with a later inverse-multiply
+            # restore — v5 does not attempt that detection.
+            if node.name in deltas:
+                deltas[node.name] = f"clobbered_by_mul({node.name})"
 
     return [
         RegDelta(register=reg, delta_expr=expr)

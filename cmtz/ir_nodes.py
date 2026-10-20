@@ -249,6 +249,25 @@ class IRAdd(IRNode):
 
 
 @dataclass
+class IRMul(IRNode):
+    """Multiplicative (Hadamard) gate: compute (a * b) mod p.
+
+    For real fields (F_p): result = (a * b) % p
+    For complex fields (F_{p²}): result = mul_Fp2(a, b)
+    Both parents must share the same IRField.
+
+    Unlike IRRotate (multiply by a compile-time exponent j) and IRPoly
+    (evaluate compile-time coefficients), both operands here are IR node
+    references — the first primitive where both values are determined at
+    runtime. v5 addition; see Cook_Mertz_Spec_v2.md §2.14.
+    """
+
+    def __post_init__(self):
+        self.basic_instructions = 1
+        self.num_registers = 1
+
+
+@dataclass
 class IRComplexEmbed(IRNode):
     """Initialize a complex register with ω^re_psi + i·ω^im_psi in F_{p²}.
 

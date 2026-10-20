@@ -139,12 +139,13 @@ class TestElaborator:
 class TestVersionPragma:
     def test_no_pragma_accepts_v4_construct(self):
         """Absent a version() pragma, current (max supported) behavior holds."""
+        from cmtz.elaborator import MAX_SUPPORTED_VERSION
         src = "cfield(7); cembed(0, 1);"
         tokens = tokenize(src)
         ast = Parser(tokens).parse()
         elab = Elaborator()
         elab.elaborate(ast)  # should not raise
-        assert elab.version == 4
+        assert elab.version == MAX_SUPPORTED_VERSION
 
     def test_pragma_matching_version_passes(self):
         src = "version(2); field(7); embed(0, 0);"
@@ -197,7 +198,7 @@ class TestVersionPragma:
             elab.elaborate(ast)
 
     def test_unsupported_version_rejected(self):
-        for bad in (0, 1, 5):
+        for bad in (0, 1, 6):
             tokens = tokenize(f"version({bad}); field(7);")
             ast = Parser(tokens).parse()
             elab = Elaborator()
@@ -612,3 +613,100 @@ class TestPhasorNetwork:
         A = (roots[0], roots[1])
         expected = magsq_Fp2(A, 7, c)
         assert result.backend_output['result'] == expected
+
+
+# ── IRMul (v5) tests ──────────────────────────────────────────────────────────
+
+class TestMulPrimitive:
+    def test_mul_lowers_to_ir(self):
+        from cmtz.ir_nodes import IRMul
+        src = """
+        field(7);
+        embed(0, 1);
+        embed(1, 2);
+        mul(embed_0, embed_1) as ab;
+        """
+        result = compile_program(src, backend='python')
+        assert result.ok, f"Errors: {result.errors}"
+        mul_nodes = [n for _, n in result.ir_program.nodes() if isinstance(n, IRMul)]
+        assert len(mul_nodes) == 1
+
+    def test_mul_requires_version_5(self):
+        src = """
+        version(4);
+        field(7);
+        embed(0, 1);
+        embed(1, 2);
+        mul(embed_0, embed_1) as ab;
+        """
+        result = compile_program(src, backend='python')
+        assert not result.ok
+        assert any("requires version >= 5" in e for e in result.errors)
+
+    def test_mul_two_real_registers_correct(self):
+        """mul(a, b) on real field registers computes (a*b) mod p exactly."""
+        src = """
+        field(7);
+        embed(0, 3);
+        embed(1, 5);
+        mul(embed_0, embed_1) as ab;
+        measure(ab, mod_p) as result;
+        """
+        result = compile_program(src, backend='python')
+        assert result.ok, f"Errors: {result.errors}"
+        a = result.backend_output['embed_0']
+        b = result.backend_output['embed_1']
+        assert result.backend_output['result'] == (a * b) % 7
+
+    def test_mul_two_complex_registers_correct(self):
+        """mul(a, b) on complex (F_{p²}) registers matches mul_Fp2 directly."""
+        from cmtz.field import find_nonresidue, mul_Fp2
+        src = """
+        cfield(7);
+        cembed(0, 1);
+        cembed(2, 0);
+        mul(cembed_1, cembed_2) as prod;
+        """
+        result = compile_program(src, backend='python')
+        assert result.ok, f"Errors: {result.errors}"
+        a = result.backend_output['cembed_1']
+        b = result.backend_output['cembed_2']
+        c = find_nonresidue(7)
+        assert result.backend_output['prod'] == mul_Fp2(a, b, 7, c)
+
+    def test_mul_catalytic_clobber_raises(self):
+        """mul(...) as r0 inside interrupt{} restoring(r0) is a violation —
+        no cancellation pattern exists for a bare multiply (§6.3, v5)."""
+        src = """
+        field(7);
+        embed(0, 1);
+        embed(1, 2);
+        interrupt {
+            mul(embed_0, embed_1) as r0;
+        } restoring (r0);
+        """
+        result = compile_program(src, backend='python')
+        assert not result.ok
+        assert any("Catalytic" in e for e in result.errors)
+
+    def test_mul_glsl_backend_emits_helper_call(self):
+        src = """
+        field(7);
+        embed(0, 1);
+        embed(1, 2);
+        mul(embed_0, embed_1) as ab;
+        """
+        result = compile_program(src, backend='glsl')
+        assert result.ok, f"Errors: {result.errors}"
+        assert 'mul_mod_p(' in result.backend_output['glsl_source']
+
+    def test_mul_wasm_backend_emits(self):
+        src = """
+        field(7);
+        embed(0, 1);
+        embed(1, 2);
+        mul(embed_0, embed_1) as ab;
+        """
+        result = compile_program(src, backend='wasm')
+        assert result.ok, f"Errors: {result.errors}"
+        assert '$mul_p' in result.backend_output['wat_source']

@@ -50,6 +50,7 @@ TOKEN_SPEC: list[tuple[str, str]] = [
     ('KW_ADD',      r'\badd\b'),
     ('KW_CONJ',     r'\bconj\b'),
     ('KW_MAGSQ',    r'\bmagsq\b'),
+    ('KW_MUL',      r'\bmul\b'),
 
     # Identifiers (after keywords and modes)
     ('ID',          r'[A-Za-z_][A-Za-z0-9_]*'),

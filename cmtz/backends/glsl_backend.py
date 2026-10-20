@@ -28,7 +28,7 @@ from typing import Optional
 from ..ir_nodes import (
     IRProgram, IRNode, IREmbed, IRPrimitiveRoots, IRRotate,
     IRPoly, IRMatPow, IRMeasure, IRCompose, IRRegion, IRCatalyticRegion,
-    IRCycloPhiPoly, IRAdd, IRComplexEmbed, IRConjugate, IRMagnitudeSq,
+    IRCycloPhiPoly, IRAdd, IRComplexEmbed, IRConjugate, IRMagnitudeSq, IRMul,
 )
 from ..field import IRField, primitive_roots_Fp
 
@@ -261,6 +261,8 @@ class GLSLEmitter:
             self._emit_conjugate(name, node)
         elif isinstance(node, IRMagnitudeSq):
             self._emit_magsq(name, node)
+        elif isinstance(node, IRMul):
+            self._emit_mul(name, node)
 
     def _emit_embed(self, name: str, node: IREmbed) -> None:
         var = self.fresh_var("emb")
@@ -400,6 +402,17 @@ class GLSLEmitter:
         src_var = self._resolve_parent(node, 0)
         var = self.fresh_var("msq")
         self.emit(f"uint {var} = magsq_fp2({src_var});  // |z|² → F_p")
+        self._var_map[name] = var
+
+    def _emit_mul(self, name: str, node: IRMul) -> None:
+        a_var = self._resolve_parent(node, 0)
+        b_var = self._resolve_parent(node, 1)
+        if self.field.is_complex:
+            var = self.fresh_var("mul")
+            self.emit(f"uvec2 {var} = mul_fp2({a_var}, {b_var});")
+        else:
+            var = self.fresh_var("mul")
+            self.emit(f"uint {var} = mul_mod_p({a_var}, {b_var});")
         self._var_map[name] = var
 
     # ── Helpers ──────────────────────────────────────────────────────

@@ -1,11 +1,11 @@
 """Tests for analysis passes: cycle check, field consistency, catalytic verify."""
 
 import pytest
-from cmtz.field import IRField, find_nonresidue, add_Fp2, conj_Fp2, magsq_Fp2
+from cmtz.field import IRField, find_nonresidue, add_Fp2, conj_Fp2, magsq_Fp2, mul_Fp2
 from cmtz.ir_nodes import (
     IRProgram, IRNode, IREmbed, IRRotate, IRCompose,
     IRRegion, IRCatalyticRegion, CycleError,
-    IRAdd, IRComplexEmbed, IRConjugate, IRMagnitudeSq, IRPoly,
+    IRAdd, IRComplexEmbed, IRConjugate, IRMagnitudeSq, IRPoly, IRMul,
 )
 from cmtz.analysis.cycle_check import (
     check_cycles, check_cycles_diagnostic, find_back_edges,
@@ -200,6 +200,26 @@ class TestCatalyticVerify:
         with pytest.raises(CatalyticViolationError):
             verify_catalytic(prog)
 
+    def test_mul_clobber_raises(self):
+        """IRMul writing to a listed catalytic register is a violation (v5,
+        §6.3) — unlike IRRotate, there's no m-fold cancellation guarantee."""
+        field = IRField(p=7, q=7)
+        prog = IRProgram(ir_field=field)
+        a = IREmbed(name="a", ir_field=field, index=0, psi=1)
+        b = IREmbed(name="b", ir_field=field, index=1, psi=2)
+        prog.add_node(a)
+        prog.add_node(b)
+        # "r0" is both the mul's output name and the listed catalytic reg
+        inner = IRMul(name="r0", ir_field=field, parents=[a, b])
+        prog.add_node(inner)
+        region = IRCatalyticRegion(
+            name="handler1", ir_field=field,
+            inner_nodes=[a, b, inner], catalytic_regs=["r0"],
+        )
+        prog.add_node(region)
+        with pytest.raises(CatalyticViolationError):
+            verify_catalytic(prog)
+
 
 class TestCostPropagation:
     def test_compose_lemma_2_1(self):
@@ -379,5 +399,35 @@ class TestComplexFieldConsistency:
         prog.add_node(a)
         prog.add_node(b)
         prog.add_node(add)
+        with pytest.raises(FieldMismatchError):
+            check_field_consistency(prog)
+
+    def test_mul_same_field_passes(self):
+        """IRMul (v5) with both parents in the same real field is fine —
+        the generic same-field rule in check_field_consistency covers it
+        with no IRMul-specific code needed."""
+        from cmtz.analysis.field_consistency import check_field_consistency
+        field = IRField(p=7, q=7)
+        prog = IRProgram(ir_field=field)
+        a = IREmbed(name="a", ir_field=field, index=0, psi=1)
+        b = IREmbed(name="b", ir_field=field, index=1, psi=2)
+        mul = IRMul(name="ab", ir_field=field, parents=[a, b])
+        prog.add_node(a)
+        prog.add_node(b)
+        prog.add_node(mul)
+        check_field_consistency(prog)  # should not raise
+
+    def test_mul_mixed_fields_raises(self):
+        from cmtz.analysis.field_consistency import check_field_consistency, FieldMismatchError
+        c = find_nonresidue(7)
+        cfield = IRField(p=7, q=53, c=c)
+        real_field = cfield.real_field()
+        prog = IRProgram(ir_field=cfield)
+        a = IRComplexEmbed(name="a", ir_field=cfield, re_psi=0, im_psi=1)
+        b = IREmbed(name="b", ir_field=real_field, index=0, psi=0)
+        mul = IRMul(name="ab", ir_field=cfield, parents=[a, b])
+        prog.add_node(a)
+        prog.add_node(b)
+        prog.add_node(mul)
         with pytest.raises(FieldMismatchError):
             check_field_consistency(prog)

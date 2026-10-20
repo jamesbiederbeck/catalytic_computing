@@ -10,7 +10,7 @@ Grammar:
                  | 'field' '(' INT ')' ';'
   statement    ::= embed_stmt | rotate_stmt | compose_stmt
                  | measure_stmt | roots_stmt | cyclo_phi_stmt
-                 | matpow_stmt | catalytic_stmt
+                 | matpow_stmt | catalytic_stmt | mul_stmt
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from .ast_nodes import (
     Program, VersionDecl, FieldDecl, CFieldDecl, EmbedStmt, RotateStmt,
     ComposeStmt, RootsStmt, CycloPhiStmt, MatPowStmt, CatalyticStmt,
     InterruptStmt, MeasureStmt, AddStmt, CEmbedStmt, ConjStmt, MagSqStmt,
-    ASTNode,
+    MulStmt, ASTNode,
 )
 
 
@@ -161,6 +161,7 @@ class Parser:
             'KW_CEMBED': self._parse_cembed,
             'KW_CONJ': self._parse_conj,
             'KW_MAGSQ': self._parse_magsq,
+            'KW_MUL': self._parse_mul,
         }
         handler = dispatch.get(tok.type)
         if handler is None:
@@ -318,6 +319,18 @@ class Parser:
         name = self.expect_id()
         self.expect('SEMI')
         return MagSqStmt(src=src, name=name, line=tok.line, col=tok.col)
+
+    def _parse_mul(self) -> MulStmt:
+        tok = self.advance()  # 'mul'
+        self.expect('LPAREN')
+        a = self.expect_id()
+        self.expect('COMMA')
+        b = self.expect_id()
+        self.expect('RPAREN')
+        self.expect('KW_AS')
+        name = self.expect_id()
+        self.expect('SEMI')
+        return MulStmt(a=a, b=b, name=name, line=tok.line, col=tok.col)
 
     def _parse_measure(self) -> MeasureStmt:
         tok = self.advance()  # 'measure'

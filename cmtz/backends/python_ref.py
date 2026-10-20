@@ -14,6 +14,9 @@ v4 additions (complex F_{p²} support):
   - IRComplexEmbed: initializes (ω^re_psi, ω^im_psi)
   - IRConjugate: conj_Fp2
   - IRMagnitudeSq: magsq_Fp2 → int
+
+v5 additions:
+  - IRMul: mul_Fp2 for complex, plain multiplication for real
 """
 
 from __future__ import annotations
@@ -21,11 +24,11 @@ from __future__ import annotations
 from ..ir_nodes import (
     IRProgram, IRNode, IREmbed, IRPrimitiveRoots, IRRotate,
     IRPoly, IRMatPow, IRMeasure, IRCompose, IRRegion, IRCatalyticRegion,
-    IRAdd, IRComplexEmbed, IRConjugate, IRMagnitudeSq,
+    IRAdd, IRComplexEmbed, IRConjugate, IRMagnitudeSq, IRMul,
 )
 from ..field import (
     IRField, primitive_roots_Fp, horner_eval_Fq, to_base,
-    add_Fp2, conj_Fp2, magsq_Fp2,
+    add_Fp2, conj_Fp2, magsq_Fp2, mul_Fp2,
 )
 
 
@@ -72,6 +75,8 @@ class PythonBackend:
             return self.eval_conjugate(node)
         elif isinstance(node, IRMagnitudeSq):
             return self.eval_magsq(node)
+        elif isinstance(node, IRMul):
+            return self.eval_mul(node)
         else:
             return 0
 
@@ -125,6 +130,19 @@ class PythonBackend:
         if isinstance(a, tuple) and isinstance(b, tuple):
             return add_Fp2(a, b, self.p)
         return (a + b) % self.p  # type: ignore[operator]
+
+    def eval_mul(self, node: IRMul) -> int | tuple[int, int]:
+        """Multiplication: (a * b) mod p for real, mul_Fp2 for complex."""
+        a = self._get_parent_val(node)
+        b = self._get_parent_val_by_index(node, 1)
+        if isinstance(a, tuple) and isinstance(b, tuple):
+            if node.ir_field is None or node.ir_field.c is None:
+                raise ValueError(
+                    f"IRMul '{node.name}': complex operands require a "
+                    f"non-residue c on the field"
+                )
+            return mul_Fp2(a, b, self.p, node.ir_field.c)
+        return (a * b) % self.p  # type: ignore[operator]
 
     def eval_complex_embed(self, node: IRComplexEmbed) -> tuple[int, int]:
         """Initialize complex register ω^re_psi + i·ω^im_psi."""

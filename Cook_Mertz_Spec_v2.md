@@ -1,13 +1,13 @@
-# Cook–Mertz Computation Model — Specification v4
+# Cook–Mertz Computation Model — Specification v5
 
 ## 1. Introduction
 
 The Cook–Mertz model defines a **branch-free**, arithmetic-circuit-based computation paradigm
 for evaluating tree-structured programs in small space via catalytic register techniques.
-This specification describes the **v4 revision**, which extends the computation model with
-additive superposition, complex-valued registers over the extension field F_{p²}, and the
-phasor network primitives (conjugate, magnitude squared) required to express interference
-patterns in exact modular arithmetic.
+This specification describes the **v5 revision**, which adds `IRMul` — a register×register
+multiplicative (Hadamard) gate — on top of v4's additive superposition and complex-valued
+registers over the extension field F_{p²}, and the phasor network primitives (conjugate,
+magnitude squared) required to express interference patterns in exact modular arithmetic.
 
 The model implements the key insight from Cook & Mertz [CM24] and Goldreich's exposition [Gol24]:
 polynomial interpolation via roots of unity in a prime field F_p enables space-efficient tree
@@ -32,10 +32,10 @@ unchanged" under v4. Mapped onto semver:
 | v2 | 2.0.0 | **breaking** — renamed/changed constructs |
 | v3 | 2.1.0 | additive — `interrupt {}` only |
 | v4 | 2.2.0 | additive — `cfield`, `add`, `cembed`, `conj`, `magsq` |
-| v5 (`IRMul`, §2.14, PROPOSED) | 2.3.0 | additive by design — mirrors `IRAdd` |
+| v5 | 2.3.0 | additive — `mul` / `IRMul` (§2.14), mirrors `IRAdd` |
 
 The package version (`cmtz.__version__`) follows the semver column. The `version(n)` DSL pragma
-(§2.0, §4) is keyed to the spec-revision column instead — `n` ∈ {2, 3, 4} — since that's the
+(§2.0, §4) is keyed to the spec-revision column instead — `n` ∈ {2, 3, 4, 5} — since that's the
 vocabulary this document and the compiler's error messages already use; it is not a semver
 string. See `cmtz/elaborator.py`'s `CONSTRUCT_MIN_VERSION` for the construct → spec-revision
 mapping enforced at compile time.
@@ -43,16 +43,16 @@ mapping enforced at compile time.
 ### 2.0 Version Pragma
 
 - **Operation**: Declares the target spec revision for the program. Optional; if absent, the
-  compiler accepts any construct it supports (current max: v4).
-- **Parameters**: integer spec revision `n`, currently `2 <= n <= 4`
+  compiler accepts any construct it supports (current max: v5).
+- **Parameters**: integer spec revision `n`, currently `2 <= n <= 5`
 - **DSL form**: `version(n);` — must be the first statement in the program, before any
   `field`/`cfield` declaration
 - **Behavior**: every construct in the program (including nested inside `catalytic {}` /
   `interrupt {}` bodies) is checked against the spec revision it was introduced in
   (`FieldDecl`/`embed`/`rotate`/`compose`/`roots`/`cyclo_phi`/`matpow`/`catalytic`/`measure` → 2;
-  `interrupt` → 3; `cfield`/`add`/`cembed`/`conj`/`magsq` → 4). Using a construct newer than the
-  declared version is a compile-time `ElaborationError`, e.g. `cembed` under `version(2)` raises
-  "CEmbedStmt requires version >= 4, but program declares version(2)".
+  `interrupt` → 3; `cfield`/`add`/`cembed`/`conj`/`magsq` → 4; `mul` → 5). Using a construct newer
+  than the declared version is a compile-time `ElaborationError`, e.g. `cembed` under `version(2)`
+  raises "CEmbedStmt requires version >= 4, but program declares version(2)".
 - **Non-goal**: the pragma does not resurrect old *behavior* (e.g. v2's stricter, since-removed
   catalytic verification semantics) — only which *constructs* are accepted. It is a syntax gate,
   not a semantics emulator.
@@ -102,14 +102,14 @@ additive gates. The v4 model adds addition and the complex extension F_{p²} so 
 phasors (complex amplitudes) can be computed exactly in modular arithmetic. All
 operations remain branch-free and integer; no floating point is introduced.
 
-### What v5 changes (PROPOSED — not yet implemented)
+### What v5 changes
 
 | # | v4 Limitation | v5 Change |
 |---|---|---|
 | 1 | No register×register multiply. `IRRotate` scales by a compile-time exponent `j`; `IRPoly` evaluates compile-time coefficients; `IRAdd` is the *only* primitive that combines two dynamically-computed registers, and it adds rather than multiplies | New `IRMul` primitive; `mul(a, b) as name` DSL form |
-| 2 | Catalytic verifier (§6.3) has no rule for a hypothetical register×register multiply | New rule: `IRMul` writing to a catalytic-region register is treated as destructive by default (§6.3 update) |
+| 2 | Catalytic verifier (§6.3) had no rule for register×register multiply | New rule: `IRMul` writing to a catalytic-region register is treated as destructive by default (§6.3) |
 
-**Conceptual basis (v5, proposed).** Every existing multiplicative primitive scales a
+**Conceptual basis (v5).** Every existing multiplicative primitive scales a
 register by a value fixed at *compile time* (a root-of-unity exponent, or polynomial
 coefficients). This matches Cook–Mertz tree evaluation, where the circuit structure is
 static. But algorithms whose messages are themselves computed at runtime and then
@@ -117,9 +117,9 @@ multiplied pairwise — e.g. Fourier-domain convolution steps in NTT-based polyn
 multiplication, or the variable-to-factor product step in belief propagation on a factor
 graph — need a primitive that multiplies two *IR node outputs* together, not a node and
 a constant. `IRMul` closes that gap, mirroring how v4's `IRAdd` closed the analogous gap
-for addition. The underlying arithmetic already exists: `mul_Fp2` (§3.4) has been present
-in `field.py` since v4, used internally by the GLSL backend's `mul_fp2` helper (§7.4);
-v5 is primarily about exposing it as a first-class DAG node rather than inlining it.
+for addition. The underlying arithmetic already existed: `mul_Fp2` (§3.4) was added to
+`field.py` in v4, used internally by the GLSL backend's `mul_fp2` helper (§7.4) for
+`magsq`'s squaring; v5 exposes it as a first-class DAG node rather than only inlining it.
 
 
 ## 2. Core Primitives
@@ -238,18 +238,22 @@ v5 is primarily about exposing it as a first-class DAG node rather than inlining
 - **Cost**: 3 basic instructions (two squares, one add, one mod p)
 - **Physical interpretation**: measures the power of a phasor signal
 
-### 2.14 Multiplication (Hadamard Gate) — PROPOSED v5
+### 2.14 Multiplication (Hadamard Gate)
 
 - **Operation**: Compute (a·b) mod p, or mul_Fp2(a, b) mod p for complex registers
 - **Parameters**: two source registers of the same type (both F_p or both F_{p²})
 - **IR Node**: `IRMul(parents=[a, b], ir_field: IRField)`
-- **Cost**: 1 basic instruction for F_p (a single modular multiply); 4 basic
-  instructions for F_{p²} (the Karatsuba-style `mul_Fp2` cross terms, §3.4).
-  0 recursive calls, 1 output register — same accounting shape as `IRAdd` (§2.10).
+- **Cost**: 1 basic instruction, 0 recursive calls, 1 output register — same
+  accounting shape as `IRAdd` (§2.10); the field-dependent operation count
+  (a single multiply for F_p, the Karatsuba-style `mul_Fp2` cross terms for
+  F_{p²}, §3.4) is not tracked separately in the cost fields, matching how
+  `IRAdd` accounts for `add_Fp2` too.
 - **DSL form**: `mul(a, b) as name;`
 - **Restriction**: both parents must share the same `IRField` (same p, q, and c).
   Mixing real and complex registers at `IRMul` is a field consistency error —
-  identical rule to `IRAdd` (§6.5).
+  identical rule to `IRAdd` (§6.5). No `IRMul`-specific code was needed for this:
+  the existing generic same-field check in `field_consistency.py` already covers
+  any binary node, `IRMul` included.
 - **Distinction from existing multiplicative primitives**: `IRRotate` (§2.2) and
   `IRPoly` (§2.4) both multiply a register by a value fixed at *compile time*
   (a root exponent, or polynomial coefficients). `IRMul` is the first primitive
@@ -259,11 +263,11 @@ v5 is primarily about exposing it as a first-class DAG node rather than inlining
   steps, or the variable-to-factor product step in belief propagation).
 - **Catalytic interaction (§6.3)**: unlike `IRRotate`, whose m-fold application
   cancels by root-of-unity symmetry, a bare `IRMul` write to a catalytic register
-  has no automatic net-zero guarantee. The verifier must treat it like `IREmbed` —
-  a destructive write — unless a later `IRMul` by the modular inverse is present
-  in the same region to restore the original value. v5 does not propose automatic
-  inverse-pairing detection; until that exists, `IRMul` targeting a catalytic
-  register inside `interrupt {}` should be flagged as a violation.
+  has no automatic net-zero guarantee. The verifier treats it like `IREmbed` —
+  any `IRMul` whose output name matches a listed catalytic register is a definite
+  violation. There is no inverse-pairing detection (a later `IRMul` by the modular
+  inverse is not recognized as a restore) — that remains a possible future
+  refinement, not something v5 attempts.
 
 
 ## 3. Field Arithmetic
@@ -350,7 +354,7 @@ statement      ::= embed_stmt | rotate_stmt | compose_stmt
                  | measure_stmt | roots_stmt | cyclo_phi_stmt
                  | matpow_stmt | catalytic_stmt | interrupt_stmt
                  | add_stmt | cembed_stmt | conj_stmt | magsq_stmt
-                 | mul_stmt                                        -- PROPOSED v5
+                 | mul_stmt                                        -- v5
 
 roots_stmt     ::= 'roots' '(' p=INT ')' 'as' ID ';'
 cyclo_phi_stmt ::= 'cyclo_phi' '(' n=INT ')' 'as' ID ';'
@@ -377,7 +381,7 @@ conj_stmt      ::= 'conj' '(' a=ID ')' 'as' ID ';'
 magsq_stmt     ::= 'magsq' '(' a=ID ')' 'as' ID ';'
                    -- Requires complex input. Output is real (F_p).
 
-mul_stmt       ::= 'mul' '(' a=ID ',' b=ID ')' 'as' ID ';'         -- PROPOSED v5
+mul_stmt       ::= 'mul' '(' a=ID ',' b=ID ')' 'as' ID ';'         -- v5
                    -- Both operands must share the same IRField.
                    -- Same field-consistency restriction as add_stmt.
 
@@ -451,7 +455,7 @@ DSL source (.cmtz)
        │          cembed(r,i)  → IRComplexEmbed     (v4)
        │          conj(a)      → IRConjugate        (v4)
        │          magsq(a)     → IRMagnitudeSq      (v4)
-       │          mul(a,b)     → IRMul              (PROPOSED v5)
+       │          mul(a,b)     → IRMul              (v5)
        ▼
   [Static Analysis]
        ├── Cycle check (topological sort)
@@ -503,7 +507,7 @@ have net-zero symbolic delta after the inner computation. Current checks:
   by root-of-unity cancellation. Treated as net-zero symbolically.
 - **Composition (IRCompose)**: safe if both sub-programs are clean
   (Lemma 2.1 guarantees this for correctly structured programs).
-- **Multiplication (IRMul) — PROPOSED v5**: unlike `IRRotate`, a bare `IRMul`
+- **Multiplication (IRMul)**: unlike `IRRotate`, a bare `IRMul`
   writing to a catalytic register has no automatic cancellation — there is no
   m-fold pattern that guarantees the net effect is the identity. Treated the
   same as `IREmbed`: a definite violation, unless paired with a later `IRMul`
@@ -519,9 +523,9 @@ of compliance for more complex handlers:
 
 Extends §6.2 with type rules for the F_{p²}/F_p boundary:
 
-- **Same-field rule**: all binary operands (`IRAdd`, `IRRotate`, and — PROPOSED v5 —
-  `IRMul`) must share the same `IRField` exactly (same p, q, and c). Mixing F_p and
-  F_{p²} at any binary op is an error.
+- **Same-field rule**: all binary operands (`IRAdd`, `IRRotate`, `IRMul`) must
+  share the same `IRField` exactly (same p, q, and c). Mixing F_p and F_{p²} at
+  any binary op is an error.
 - **Complex-only ops**: `IRConjugate` and `IRComplexEmbed` require `ir_field.is_complex`.
   Using them in a real-field program is a field consistency error.
 - **Type-lowering at IRMagnitudeSq**: the single allowed cross-type boundary. Input field
@@ -570,10 +574,9 @@ at runtime — the distinction is purely a static analysis concern.
 The `registers` dict holds either `int` (real) or `(int, int)` (complex) values —
 dispatch is by `isinstance(val, tuple)`.
 
-**v5 complex support (PROPOSED)**: `IRMul` dispatches to plain `(a * b) % p` for real
-registers, `mul_Fp2` for complex — `mul_Fp2` already exists in `field.py` (added in v4
-as scaffolding for other Fp2 ops) and would simply be exposed at the IR level for the
-first time.
+**v5 complex support**: `IRMul` dispatches to plain `(a * b) % p` for real
+registers, `mul_Fp2` for complex — `mul_Fp2` already existed in `field.py` (added in v4
+as scaffolding for other Fp2 ops) and is now exposed at the IR level for the first time.
 
 ### 7.2 PyTorch Backend
 
@@ -601,9 +604,9 @@ New GLSL helpers `add_fp2`, `mul_fp2`, `conj_fp2`, `magsq_fp2` are emitted as
 inlined functions alongside the existing `mul_mod_p`/`add_mod_p` helpers.
 `IRMagnitudeSq` output is a `uint` (real), ending the `uvec2` chain.
 
-**v5 (PROPOSED)**: `mul_fp2`/`mul_mod_p` are already emitted per v4 (used internally
-by `magsq_fp2`'s squaring); v5 would simply call them wherever an `IRMul` node
-appears in the DAG, the same way `add_fp2`/`add_mod_p` are already called for `IRAdd`.
+**v5**: `mul_fp2`/`mul_mod_p` were already emitted per v4 (used internally
+by `magsq_fp2`'s squaring); v5 calls them wherever an `IRMul` node
+appears in the DAG, the same way `add_fp2`/`add_mod_p` are called for `IRAdd`.
 
 
 ## 8. Migration
@@ -652,7 +655,7 @@ To opt back into strict verification, rename the relevant blocks to
 All v3 programs compile unchanged under v4. New keywords (`cfield`, `add`, `cembed`,
 `conj`, `magsq`) are only needed for complex/additive programs.
 
-### v4 → v5 (PROPOSED — not yet implemented)
+### v4 → v5
 
 | v4 construct | v5 equivalent | Notes |
 |---|---|---|
@@ -660,7 +663,7 @@ All v3 programs compile unchanged under v4. New keywords (`cfield`, `add`, `cemb
 | `IRField(p, q, c=None)` | unchanged | No new field parameters needed |
 | §6.3 catalytic checks (`IREmbed`, `IRRotate`, `IRCompose`) | + `IRMul` rule | `IRMul` on a catalytic register is destructive by default, unlike `IRRotate` |
 
-All v4 programs would compile unchanged under v5. The new keyword (`mul`) is only
+All v4 programs compile unchanged under v5. The new keyword (`mul`) is only
 needed by programs that combine two runtime-computed registers multiplicatively —
 e.g. NTT-style convolution or belief-propagation message products.
 
@@ -673,4 +676,4 @@ e.g. NTT-style convolution or belief-propagation message products.
 - [Wil25] Williams. "Every multi-tape TM running in time t can be simulated in space O(√t log t)." 2025.
 - [BCK+14] Buhrman et al. "Computing with a Full Memory: Catalytic Space." STOC 2014.
 
-*End of Cook–Mertz v3 Specification*
+*End of Cook–Mertz v5 Specification*

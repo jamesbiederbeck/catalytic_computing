@@ -15,7 +15,7 @@ from __future__ import annotations
 from .ast_nodes import (
     Program, FieldDecl, CFieldDecl, EmbedStmt, RotateStmt, ComposeStmt,
     RootsStmt, CycloPhiStmt, MatPowStmt, CatalyticStmt, InterruptStmt,
-    MeasureStmt, AddStmt, CEmbedStmt, ConjStmt, MagSqStmt, ASTNode,
+    MeasureStmt, AddStmt, CEmbedStmt, ConjStmt, MagSqStmt, MulStmt, ASTNode,
 )
 from .field import IRField, compute_working_field, find_nonresidue
 
@@ -47,10 +47,11 @@ CONSTRUCT_MIN_VERSION: dict[type, int] = {
     CEmbedStmt: 4,
     ConjStmt: 4,
     MagSqStmt: 4,
+    MulStmt: 5,
 }
 
 MIN_SUPPORTED_VERSION = 2  # v1's cyclo()/cyclo_poly() lexicon no longer parses
-MAX_SUPPORTED_VERSION = 4  # bump when IRMul / v5 ships
+MAX_SUPPORTED_VERSION = 5  # v5: IRMul
 
 
 class Elaborator:
