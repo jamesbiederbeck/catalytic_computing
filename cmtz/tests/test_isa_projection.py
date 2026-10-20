@@ -161,3 +161,18 @@ def test_mask_outside_the_field_is_refused_by_the_simulator():
     m.R[PR.T1] = 18
     with pytest.raises(SimError):
         m.run()
+
+
+def test_benchmark_numbers():
+    """Pinned so a change to the programs shows up in review; the docs quote
+    them. Cycles are 2 per instruction (no LD in these programs)."""
+    got = {r["program"]: (r["words"], r["instructions"], r["cycles"],
+                          r["catalytic"], r["temps"], r["field_regs"])
+           for r in PR.benchmark()}
+    assert got == {
+        "gate_direct": (7, 7, 14, 0, 1, 8),
+        "gate_projection": (17, 212, 424, 0, 4, 13),
+        "gate_clean": (17, 227, 454, 2, 1, 10),
+        "tree_direct": (17, 17, 34, 0, 3, 20),
+        "tree_clean": (53, 14755, 29510, 4, 1, 22),
+    }

@@ -378,3 +378,28 @@ def prove(demo: Demo):
     lay = demo.layout
     return verify_clean(demo.image, list(lay.catalytic.values()),
                         {r: gain for r in lay.outputs.values()}, lay.temps)
+
+
+BENCH = [gate_direct, gate_projection, gate_clean, tree_direct, tree_clean]
+CLOCK_HZ = 27_000_000       # Tang Nano 20K crystal; the core runs on it
+
+
+def benchmark() -> list[dict]:
+    """Per program: size, instructions and cycles (exact for every input:
+    the clean-computation proof follows the one path all inputs take, and
+    it is checked against the simulator), and registers by role."""
+    rows = []
+    for fn in BENCH:
+        demo = fn()
+        rep = prove(demo)
+        lay = demo.layout
+        rows.append({
+            "program": fn.__name__, "words": len(demo.image.words),
+            "instructions": rep.retired, "cycles": rep.cycles,
+            "us_at_27MHz": round(rep.cycles / CLOCK_HZ * 1e6, 2),
+            **lay.counts(),
+            "field_regs": sum(len(v) for v in (lay.inputs, lay.catalytic,
+                                                lay.outputs, lay.temps)),
+            "not_restored": len(lay.temps) + len(lay.outputs),
+        })
+    return rows
