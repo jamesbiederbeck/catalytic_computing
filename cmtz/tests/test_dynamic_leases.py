@@ -292,3 +292,28 @@ class TestLeastCost:
         assert ks == ["leased", "leased"]
         stalls = sorted(rep.by_name()[j.name].start for j in jobs)
         assert stalls[1] >= 39910         # the second waited for the first
+
+
+def test_storage_benchmark_gate():
+    """The A5 storage result for the gate stream, pinned: borrowing gets
+    lane 1 down to the spill form's 7 registers, not below, and is 32x
+    slower per gate (examples/fpga/mlane_bench.py)."""
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[2] / "examples/fpga/mlane_bench.py"
+    spec = importlib.util.spec_from_file_location("mlane_bench", path)
+    B = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(B)
+    got = {}
+    for name, (policy, forms) in B.POLICY_FORMS.items():
+        need = {"private, direct": 8, "private, clean": 10}.get(name, 7)
+        assert B.storage_run(False, policy, forms, need - 1, 4, 7, 1000) is None
+        r = B.storage_run(False, policy, forms, need, 4, 7, 1000)
+        got[name] = (need, r["kinds"], r["per_job_cycles"], r["borrowed"])
+    assert got == {
+        "private, direct": (8, ["direct"], 14, 0),
+        "private, clean": (10, ["clean"], 614, 0),
+        "private, spill": (7, ["spill"], 19, 0),
+        "lease (static)": (7, ["leased"], 614, 3),
+        "least cost (all forms)": (7, ["spill"], 19, 0),
+    }

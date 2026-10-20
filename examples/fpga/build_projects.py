@@ -411,6 +411,11 @@ MLANE_STATUS: dict[str, str] = {
                   "lane's live registers while it runs; the owner's registers "
                   "came back every time and its stalls matched the model to "
                   "the cycle). See `docs/cmtz-multilane.md` of this repo.",
+    "cmtz-quad": "Checked on the board with `examples/fpga/mlane_run.py` "
+                 "(468 of 468 checks with --quick: the standard scenes, 7 "
+                 "program pairs, an interrupt on one lane while the others "
+                 "run; then 252 of 252 for a 12-job throughput batch). See "
+                 "`docs/cmtz-multilane.md` of this repo.",
 }
 
 

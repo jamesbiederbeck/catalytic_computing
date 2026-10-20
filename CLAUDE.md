@@ -42,6 +42,11 @@ uv run python examples/fpga/uart_check.py 08_ntt_butterfly.cmtz --basic
 uv run python examples/fpga/build_projects.py <dir> --core
 uv run python examples/fpga/core_run.py [--quick] [--only examples sweeps interrupts projection soundness]
 uv run python examples/fpga/projection_bench.py [--board]
+
+# multilane cmtz-core (RFC-003): build, board check, benchmarks
+uv run python examples/fpga/build_projects.py <dir> --mlane 2 [--lease]
+uv run python examples/fpga/mlane_run.py [--quick] [--only independent interrupts leases throughput]
+uv run python examples/fpga/mlane_bench.py
 ```
 
 The Verilog simulation tests need `iverilog`/`vvp` on `PATH` and skip without them. The `tang-nano-20k` playground repo's `env.sh` puts them there along with apio's yosys, nextpnr and openFPGALoader (`source` it first).
@@ -127,6 +132,37 @@ A fixed processor per field (`cmtz/isa/`) instead of a circuit per program. `enc
 - **Testbench guards:** the core testbench runs ~70 cases back to back on one core (state carried, as on the board); mutation tests in `test_isa_core.py` prove it can fail. Interrupt trigger points are retired-instruction counts (`irq_at`), matched in the testbench at instruction boundaries. `Machine.cycles` models the FSM; `CoreCase(check_cycles=True)` checks it against the RTL.
 - **Values outside F_p:** registers are rw bits and can hold anything below q (HORNER, LDI, LD, host `W`), and the ALU is not arithmetic mod p on such operands (its SUB computes 0 - 18 as 12). The simulator raises instead of modelling that, so counterexamples run on the RTL (`test_isa_catalytic.py`) and the board (`core_run.py --only soundness`). `verify_handler` requires every register the handler reads, and every borrowed one, to be unreachable by such values and (unless borrowed) host-written; `CoreLink.run` refuses inputs ≥ p.
 - **Roots-of-unity projection** (`isa/projection.py`): hand-written gate and depth-2 gate-tree programs (direct, projected, clean), checked against `cmtz/projection_oracle.py`, a plain-integer model that must not import cmtz code. `analysis/isa_clean.py` proves clean evaluation on machine code by symbolic execution with polynomial registers (exact on F_p via x^p = x, concrete control flow); `projection.prove()` and `benchmark()` use it. `examples/fpga/projection_bench.py` prints the numbers; `test_benchmark_numbers` pins them.
+
+### Multilane (RFC-003)
+
+`rfcs/RFC-003-catalytic-multicore.md` has the design and every result.
+
+- **Reference model** (`isa/multicore.py`): one `sim.Machine` per lane,
+  whose `R` is a view onto a shared physical store, so a lease lends the
+  registers themselves.
+  - Scheduler policies: `private`, `static`, `dynamic`, `cost`.
+  - Owner stall on leased registers; poison when a borrower does not halt.
+  - Deterministic replay.
+  - `analysis/lease_invariants.py` checks traces and must not import the
+    model.
+- **Leases** (`isa/lease.py`): the window is R24.. in the borrower, the
+  range the compiler never allocates and the matpow library owns, so
+  library programs cannot borrow. `relocate` renames registers in machine
+  code.
+- **Proofs** (`analysis/lease_proof.py`): `certify` proves restoration on
+  the borrower's machine code (`isa_clean`, window as `supplied`), and
+  `Checker` is the scheduler's acceptance check. A lease is never granted
+  on a claim alone.
+- **BORROW/RELEASE** are in `encoding.EXT_OPS`, outside `OPS`. Only
+  `ext=True` decoders know them, so the single core and its Verilog are
+  unchanged; `test_isa_mlane.py` pins `cmtz_core.v` by sha256.
+- **RTL** (`backends/isa_mlane.py`):
+  - `lease=False` uses unmodified `cmtz_core` lanes.
+  - `lease=True` uses `emit_core(..., lane=True)` lanes over one register
+    array.
+  - The UART protocol CMTM (`isa/mlane_host.py`) adds lane select,
+    start-together and on-chip cycle stamps.
+  - Testbench expectations come from the model, including stall cycles.
 
 ## Spec
 

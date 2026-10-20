@@ -1,6 +1,6 @@
 # RFC-003: Catalytic Multicore Scheduler and Multilane Processor
 
-**Status:** Draft, implementation in progress (see *Results by phase*)  
+**Status:** Implemented through A5 (A4 in the simulator only); see *Results by phase* and *Conclusions*  
 **Affects:** `cmtz/isa/` (new multilane model, leases), `cmtz/analysis/`
 (lease invariants, lease proofs), `cmtz/backends/` (multilane RTL and UART),
 `examples/fpga/` (board tools), the `tang-nano-20k` playground (new APIO
@@ -437,3 +437,128 @@ In the tests:
   arbitration in front of the same array, and nothing measured so far
   (A5) makes leases pay for themselves. This is the open blocker, not a
   claim.
+
+### A5: benchmarks
+
+`examples/fpga/mlane_bench.py` reproduces every model number here (seed 7,
+about 8 minutes). `test_storage_benchmark_gate` pins the gate storage
+result. Board numbers come from `mlane_run.py --json` runs on the chip.
+
+**Hypothesis 1: lanes.** The model was checked cycle-for-cycle against the
+RTL and the board. 40 queued jobs, a random mix of the five projection
+programs:
+
+| Lanes | Makespan (cycles) | IPC | Jobs/s @27 MHz | Mean latency | p95 latency |
+|---|---|---|---|---|---|
+| 1 | 367 674 | 0.500 | 2 937 | 7.94 ms | 13.6 ms |
+| 2 | 202 390 | 0.908 | 5 336 | 3.88 ms | 6.12 ms |
+| 4 | 120 612 | 1.524 | 8 954 | 1.82 ms | 3.04 ms |
+| 8 | 79 820 | 2.303 | 13 530 | 0.62 ms | 1.53 ms |
+
+- Scaling falls short of linear, because one `tree_clean` (39 910 cycles)
+  bounds the makespan once there are enough lanes.
+- With the measured host cost of about 6 ms per job (UART load, inputs,
+  start, poll), one lane manages 162 jobs/s and eight manage 1 482. Lanes
+  then mainly hide host latency, which a host that pipelines its UART
+  traffic across lanes would also do.
+
+On the board, with lockstep groups (each group of n jobs started with `B`
+and awaited before the next):
+
+| Build | Batch | One lane | All lanes | Gain |
+|---|---|---|---|---|
+| `cmtz-dual` | 12 jobs | 203 088 cycles | 160 868 | 1.26× |
+| `cmtz-lease` | 12 jobs | 242 194 | 199 974 | 1.21× |
+| `cmtz-quad` | 12 jobs | 85 010 | 80 434 | 1.06× |
+
+The lockstep groups waste most of the extra lanes. The queue scheduling
+above is what lanes are worth, and on the board it needs a host that keeps
+every lane fed. Two equal jobs reach exactly 2× (IPC 1.000 measured).
+Wall time was UART-bound in every board run: lanes did not make the board
+batch faster.
+
+**Hypothesis 2: borrowing at fixed physical storage** (model, both
+streams). Lane 0 holds five live values in R16..R20 while it loops, and
+reads them at the end. Lane 1 runs a stream of gates or of gate trees.
+The table gives the smallest lane-1 register budget each policy can run the
+stream with:
+
+| Stream | Policy | Lane-1 registers | Total register bits | Spill bits | Lease metadata bits | Borrowed | Cycles per job |
+|---|---|---|---|---|---|---|---|
+| gate | private, direct | 8 | 140 | 0 | 0 | 0 | 14 |
+| gate | private, clean | 10 | 150 | 0 | 0 | 0 | 614 |
+| gate | private, spill | 7 | 135 | 5 | 0 | 0 | 19 |
+| gate | lease (static) | 7 | 135 | 0 | 94 | 3 | 614 |
+| gate | least cost | 7 | 135 | 5 | 0 | 0 | 19 (picked spill) |
+| tree | private, direct | 20 | 200 | 0 | 0 | 0 | 34 |
+| tree | private, clean | 22 | 210 | 0 | 0 | 0 | 39 910 |
+| tree | private, spill | 17 | 185 | 25 | 0 | 0 | 53 |
+| tree | lease (static) | 17 | 185 | 0 | 94 | 5 | 39 910 |
+| tree | least cost | 17 | 185 | 25 | 0 | 0 | 53 (picked spill) |
+
+- Borrowing does what it promises. It runs the computation with lane 1
+  below the direct form's register count: 7 instead of 8 for a gate, 17
+  instead of 20 for a tree. That is 5 and 15 register bits less, with
+  every borrowed register proven and observed to come back. The owner did
+  not stall here, because its loop outlasted each lease.
+- It is the wrong way to get that saving:
+  - **Speed.** Spilling the same temporaries to data memory reaches the
+    same register count at 19 cycles per gate instead of 614 (32×), and
+    53 per tree instead of 39 910 (750×).
+  - **Storage.** Spilling uses 5 or 25 bits of data memory, which the
+    lane has anyway (1024 words). Leases need 94 bits of metadata in the
+    model's register-list form.
+  - **Logic.** In hardware, leases cost 3792 LUT4 and 460 DFF on two lanes
+    (A2). That is three orders of magnitude more than the 5 to 15 bits
+    they save.
+- The least-cost policy, offered every form, never chose to borrow.
+- The clean (projection) forms are the slow ones whether borrowed or not,
+  as in the projection write-up. Cook–Mertz pays in time for space, and at
+  depth ≤ 2 the space it saves is a handful of temporaries.
+- Snapshot storage (the debug compare at release, 15 or 25 bits) is
+  reported separately and in none of these totals.
+
+**Hardware** (`-noalu`, GW2AR-18: 20 736 LUT4):
+
+| Build | LUT4 | DFF | BSRAM | Fmax (MHz) | Board |
+|---|---|---|---|---|---|
+| `cmtz-core` | 2 918 | 690 | 2 | 114.9 | 2459/2459 (rerun at the end of this work) |
+| `cmtz-dual` | 5 030 | 1 132 | 4 | 104.0 | 958/958 |
+| `cmtz-lease` | 8 822 | 1 592 | 4 | 68.6 | 1733/1733, plus 626/626 proof-gated |
+| `cmtz-quad` | 9 048 | 1 627 | 8 | 110.9 | 468/468 (quick) + 252/252 |
+| `cmtz-quad-lease` | — | — | — | — | does not place: "Unable to find legal placement for all cells, design is probably at utilisation limit" |
+
+Independent lanes cost close to one core each: 2 918, then about 2 060 more
+per lane. Leasing on four lanes does not fit the chip at all.
+
+## Conclusions
+
+1. **Lanes work and are cheap.** Two to four independent lanes are correct
+   on the chip, cost about 2 000 LUT4 each, and raise peak IPC from 0.5 to
+   0.5 × lanes. Delivered throughput depends on keeping the lanes fed: 1.5×
+   at 4 lanes in the model with a job queue, and 1.06–1.26× in the board's
+   lockstep batches. Over the UART the host is the bottleneck.
+2. **Borrowing is correct, and a net loss here.**
+   - It works on the chip: restoration is proven before a lease and
+     observed after every one, values outside F_17 are refused, a failure
+     poisons, and owner stalls match the model to the cycle.
+   - It saves the same registers that spilling to existing data memory
+     saves, 32× to 750× more slowly.
+   - Its hardware costs 75 % more logic on two lanes, and does not fit on
+     four.
+   - No controlled experiment here shows a memory improvement, so none is
+     claimed.
+
+## Open problems and next blockers
+
+- **When could borrowing pay?** Only where the registers saved are worth
+  more than spill bandwidth and lease logic: deep trees, where Cook–Mertz
+  reuses one set of catalytic registers across levels (depth 3 needs
+  coefficients out of registers first; see the projection write-up), or a
+  machine without data memory.
+- **Cheaper leases.** A bank-granular lease whose window is muxed only at
+  the write-back and operand stage might keep the register file in
+  distributed RAM. That has not been tried.
+- **Dynamic leases** exist only in the simulator.
+- **The host.** A UART host that pipelines commands across lanes is needed
+  before lanes show their throughput on the board.
