@@ -14,7 +14,7 @@ The compiler takes `.cmtz` source programs through a classic pipeline:
 source → lexer → parser → elaborator → lowering → analysis → optimization → backend
 ```
 
-Static analysis verifies field consistency, detects cycles, tracks catalytic register obligations, and checks Theorem 1.2 cost bounds. Backends include a Python reference evaluator, GLSL 4.50 compute shader emitter, and a WebAssembly (WAT) emitter.
+Static analysis verifies field consistency, detects cycles, tracks catalytic register obligations, and checks Theorem 1.2 cost bounds. Backends include a Python reference evaluator, GLSL 4.50 compute shader emitter, a WebAssembly (WAT) emitter, and a Verilog emitter for FPGAs.
 
 ## Quick start
 
@@ -109,6 +109,19 @@ measure(magsq_2, mod_p) as norm;   -- expect 4
 - **`python_ref`** — exact Z_p reference evaluator (default)
 - **`glsl`** — emits a fully unrolled GLSL 4.50 compute shader; call `spirv_compile_command()` for the glslangValidator invocation
 - **`wasm`** — emits WebAssembly Text Format (WAT)
+- **`verilog`** — emits a pipelined Verilog-2001 module (one registered stage per runtime node, no `%`) and a self-checking testbench whose vectors come from the reference evaluator. `matpow` is not supported. See [FPGA](#fpga)
+
+## FPGA
+
+`cmtz.backends.verilog_backend.emit_verilog(prog, inputs="all")` lowers a program to hardware, turning its literal embeds into input ports. `cmtz.backends.verilog_uart.emit_uart_wrapper` wraps it in a UART front end (one byte per value, with a resync timeout) and a testbench that bit-bangs the protocol. With `debug=True` the datapath also exposes every node's value, and the front end answers `I` (info), `R` (run) and `S` (state) commands.
+
+```bash
+# one Tang Nano 20K project per example that lowers (matpow ones are skipped)
+uv run python examples/fpga/build_projects.py <dir>
+uv run python examples/fpga/build_projects.py <dir> --debug     # with state readback
+```
+
+`examples/fpga/uart_check.py <example.cmtz> [--basic]` checks a design that is loaded on the board from the terminal: info frame and hash (debug protocol), every reply byte, and every state byte against the reference. Simulation tests need `iverilog` and `vvp` on `PATH` and are skipped without them. The generated projects build with `apio` (yosys, nextpnr, gowin_pack). A multiplier project tested on the board lives in `examples/fpga/uart_mul/`, and the generated ones are in [tang-nano-20k](https://github.com/jamesbiederbeck/tang-nano-20k) under `projects/cmtz/`.
 
 ## Visualizer
 
@@ -116,7 +129,7 @@ measure(magsq_2, mod_p) as norm;   -- expect 4
 uv run python visualizer/server.py
 ```
 
-Opens a browser app that compiles `.cmtz` source and renders the IR DAG.
+Opens a browser app that compiles `.cmtz` source and renders the IR DAG. Its **Board** panel connects to an FPGA over Web Serial (or a simulated board), runs the program, and paints the board's internal state onto the graph; see [`visualizer/README.md`](visualizer/README.md).
 
 ## Field constraint
 

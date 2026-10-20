@@ -24,7 +24,22 @@ uv run python compile_script.py
 
 # Run a specific example
 uv run python examples/fibonacci_runner.py
+
+# Fast loop: skip the iverilog simulations (full suite ~2 min, this ~1 s)
+uv run pytest cmtz/tests/ -k "not Simulation"
+
+# Visualizer (IR DAG + Board panel) on http://localhost:8765; Node tests for its protocol client
+uv run python visualizer/server.py
+node --test visualizer/board.test.mjs
+UPDATE_GOLDEN=1 uv run pytest cmtz/tests/test_hwview.py   # regenerate visualizer/testdata/golden.json
+
+# FPGA: one apio project per lowerable example (add --debug for state readback)
+uv run python examples/fpga/build_projects.py <dir> [--debug] [slug ...]
+# Check a design that is loaded on the board (reads/writes the UART only)
+uv run python examples/fpga/uart_check.py 08_ntt_butterfly.cmtz --basic
 ```
+
+The Verilog simulation tests need `iverilog`/`vvp` on `PATH` and skip without them. The `tang-nano-20k` playground repo's `env.sh` puts them there along with apio's yosys, nextpnr and openFPGALoader (`source` it first).
 
 **Always use `uv` for package management** — never `pip` directly.
 
@@ -63,6 +78,7 @@ The compiler is a classic pipeline: DSL source → IR DAG → analysis → optim
    - `torch_backend.py` — `int64` tensors, explicit `% p`; availability-gated
    - `analog_descriptor.py` — emits a JSON `AnalogDescriptor` with phase offsets, GEMM pass count, register depth for hardware targeting
    - `glsl_backend.py` — emits a fully unrolled GLSL 4.50 compute shader (branch-free, integer mod arithmetic); SSBO for root table; `spirv_compile_command()` returns the glslangValidator invocation
+   - `verilog_backend.py` — pipelined Verilog-2001 (one registered stage per runtime node, no FSM, no `%`) plus a self-checking testbench; `IRMatPow` is rejected. See **FPGA flow** below.
 
 ### Key data structures
 
@@ -82,6 +98,18 @@ The DSL compiles structure and verifies cost bounds. Actual matrix computation r
 ### DSL register naming gotcha
 
 `matpow(M, d, ε) as name` requires `M` to already be a named node in the IR. The idiomatic workaround is `roots(p) as M` which creates an `IRPrimitiveRoots` node with that name, satisfying the lookup.
+
+### FPGA flow
+
+`emit_verilog` (`backends/verilog_backend.py`) → `emit_uart_wrapper` (`backends/verilog_uart.py`) → `examples/fpga/build_projects.py` (apio projects) and `hwview.py` (what `visualizer/` draws and the Board panel checks).
+
+- **Only runtime values cost hardware.** Embeds, literal-`j` rotations and anything built only from constants fold at emit time through `PythonBackend`, so the hardware and the reference share one definition. A closed program is a constant; `inputs="all"` turns every embed an output depends on into a port (default: only leaves feeding an `IRMul`).
+- **Expected values come from the reference.** Generated testbenches, `HardwareView.evaluate` and `uart_check.py` all use `evaluate_all`; it must not re-evaluate region bodies, which would clobber overridden inputs.
+- **UART protocol** (`verilog_uart.py` docstring): one byte per lane (complex = re then im), all-`0xFF` reply on an out-of-range lane, stalled requests dropped after a timeout. A `debug=True` build adds a `dbg_state` bus and `I`/`R`/`S` commands (info frame with a program hash, run, state readback). The pushed `projects/cmtz/` use the basic protocol; `cmtz-mul` has a hand-written wrapper (`examples/fpga/uart_mul/`).
+- **`visualizer/`**: `board.js` (protocol client, Web Serial and simulated transports, no DOM) is tested against `testdata/golden.json`, which `test_hwview.py` regenerates from the Python encoder, so the JS framing is checked against the real bytes.
+- **Generated files** (`cmtz_*.v`, `*_tb.v`, `diagram.svg`, per-project READMEs) are not edited by hand; change the generator and rebuild. `examples/fpga/diagram.py` draws each project's `diagram.svg` from the hardware manifest: plain SVG (no `<style>`/classes/scripts/fonts/images, its own white background rect, `viewBox`/`width`/`height`, `<title>` and `aria-label`, label text on a white rect instead of a stroke halo) because GitHub's mobile app does not render Mermaid and draws SVGs as images that ignore dark mode; `test_fpga_projects.py` enforces those rules.
+
+**Default to `-noalu`.** Build FPGA projects with `yosys-extra-options = -noalu` in `apio.ini` unless the default ALU mapping is needed (a design that does not fit in LUTs) or has been verified on the board. On the Tang Nano 20K (yosys 0.63, nextpnr-himbaechel, apicula) two `magsq` projects returned wrong answers on the chip with the default mapping (67 and 92 of 96 vectors) while RTL and post-synthesis simulation passed; with `-noalu` every vector matched. The toolchain cause is not isolated, so passing simulation proves nothing here. `ALU_VERIFIED` in `build_projects.py` lists the projects measured correct without the flag; a new example stays on `-noalu` until `uart_check.py` has matched it on the board both ways, and `ON_BOARD` (which controls the READMEs' "checked on the board" claim) is only extended after a real run. Load to SRAM first (volatile), not flash.
 
 ## Spec
 
