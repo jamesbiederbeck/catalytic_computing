@@ -212,6 +212,24 @@ def compile_program(
                 'assemble_command': bundle.assemble_command(),
             }
 
+        elif backend == 'verilog':
+            from .backends.verilog_backend import emit_verilog
+            bundle = emit_verilog(ir_prog)
+            result.backend_output = {
+                'verilog_source': bundle.verilog_source,
+                'testbench_source': bundle.testbench_source,
+                'module_name': bundle.module_name,
+                'ports': [
+                    {'name': pt.name, 'direction': pt.direction,
+                     'width': pt.width, 'node': pt.node,
+                     'complex': pt.is_complex}
+                    for pt in bundle.ports
+                ],
+                'latency': bundle.latency,
+                'num_vectors': bundle.num_vectors,
+                'simulate_command': bundle.simulate_command(),
+            }
+
         else:
             result.errors.append(f"Unknown backend: {backend}")
 
