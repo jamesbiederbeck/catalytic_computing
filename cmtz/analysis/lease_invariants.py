@@ -13,7 +13,9 @@ Checked:
     no lane lends and borrows at once
   - a lease is released or poisoned only after its borrower's job ended:
     released (one cycle after the end) if the job halted (status 2),
-    poisoned otherwise; never both, never left open at the end of the trace
+    poisoned otherwise; never both, never left open at the end of the trace.
+    A RELEASE instruction (dynamic leases) returns it one cycle after the
+    `release_req` event instead
   - with snapshots: the values at release equal the values at acquire
   - with access events: no lane touches a register leased to another lane
     or a poisoned one
@@ -37,6 +39,7 @@ def check_trace(trace: list[dict]) -> list[str]:
     ended: dict[int, dict] = {}          # lane -> its last end event
     stalled: dict[int, int] = {}         # lane -> cycle the stall began
     stall_sum: dict[int, int] = {}
+    requested: dict[int, int] = {}       # lane -> cycle of its RELEASE
     last_t = -1
 
     def owner_of(phys: int) -> int:
@@ -71,13 +74,19 @@ def check_trace(trace: list[dict]) -> list[str]:
                     errs.append(f"t={t}: poisoned register {i} leased again")
                 held[i] = lane
             leases[lane] = e
+        elif ev == "release_req":
+            requested[lane] = t
         elif ev in ("release", "poison"):
             a = leases.pop(lane, None)
             if a is None:
                 errs.append(f"t={t}: {ev} without a lease on lane {lane}")
                 continue
             end = ended.get(lane)
-            if end is None or lane in running:
+            req = requested.pop(lane, None)
+            if ev == "release" and req is not None:
+                if t != req + 1:
+                    errs.append(f"t={t}: RELEASE at {req} takes effect late")
+            elif end is None or lane in running:
                 errs.append(f"t={t}: {ev} while lane {lane}'s job runs")
             elif t != end["t"] + 1:
                 errs.append(f"t={t}: {ev} not one cycle after the end at "
@@ -122,8 +131,11 @@ def check_trace(trace: list[dict]) -> list[str]:
             ended[lane] = e
         elif ev == "stall":
             stalled[lane] = t
-            if not any(i in held and held[i] != lane or i in poisoned
-                       for i in e["phys"]):
+            # a BORROW may also wait behind an older request, or because
+            # its lane is lending or the owner is borrowing
+            if not e.get("borrow") and not any(
+                    i in held and held[i] != lane or i in poisoned
+                    for i in e["phys"]):
                 errs.append(f"t={t}: lane {lane} stalls on {e['phys']}, "
                             "which nobody else holds")
         elif ev == "resume":

@@ -59,6 +59,7 @@ FORMATS: dict[str, tuple[tuple[str, str], ...]] = {
     "L":   (("l", "imm"),),
     "XXL": (("x", "a"), ("x", "b"), ("l", "imm")),
     "RL":  (("r", "a"), ("l", "imm")),
+    "III": (("i", "a"), ("i", "b"), ("i", "c")),
 }
 
 _OPS = [
@@ -95,6 +96,19 @@ _OPS = [
 OPS: dict[str, OpSpec] = {o.name: o for o in _OPS}
 BY_CODE: dict[int, OpSpec] = {o.code: o for o in _OPS}
 
+# Multilane extension (RFC-003 A4), simulated only: not part of OPS, so the
+# single-core generator, assembler and simulator do not know these opcodes
+# (a single core reports them as a bad opcode). `decode(..., ext=True)` and
+# `assemble(..., ext=True)` accept them; `isa/multicore.py` executes them.
+_EXT_OPS = [
+    OpSpec("BORROW", 28, "III", "lease owner lane a's registers 8b .. 8b+c-1 "
+                                "as R24.. (stall while busy)"),
+    OpSpec("RELEASE", 29, "N",  "return the lease (effective next cycle)"),
+]
+EXT_OPS: dict[str, OpSpec] = {o.name: o for o in _EXT_OPS}
+ALL_OPS: dict[str, OpSpec] = {**OPS, **EXT_OPS}
+BY_CODE_EXT: dict[int, OpSpec] = {**BY_CODE, **{o.code: o for o in _EXT_OPS}}
+
 # Field ops that are F_p-linear in their register operands: what a strict
 # interrupt handler may use to modify a borrowed register.
 LINEAR_OPS = frozenset({"ADD", "SUB", "MULI", "MOV"})
@@ -111,14 +125,14 @@ class Instr:
 
     @property
     def spec(self) -> OpSpec:
-        return OPS[self.op]
+        return ALL_OPS[self.op]
 
     def __str__(self) -> str:
         return format_instr(self)
 
 
 def encode(ins: Instr) -> int:
-    spec = OPS[ins.op]
+    spec = ALL_OPS[ins.op]
     for v, n in ((ins.a, "a"), (ins.b, "b"), (ins.c, "c")):
         if not 0 <= v < 32:
             raise ValueError(f"{ins.op}: field {n}={v} out of range")
@@ -133,11 +147,12 @@ def encode(ins: Instr) -> int:
     return (spec.code << 26) | (ins.a << 21) | (ins.b << 16) | (ins.c << 11) | imm
 
 
-def decode(word: int) -> Instr:
+def decode(word: int, ext: bool = False) -> Instr:
     code = (word >> 26) & 0x3F
-    if code not in BY_CODE:
+    table = BY_CODE_EXT if ext else BY_CODE
+    if code not in table:
         raise ValueError(f"unknown opcode {code} in word {word:#010x}")
-    spec = BY_CODE[code]
+    spec = table[code]
     imm = word & ((1 << IMM_BITS) - 1)
     if spec.fmt == "XXS" and imm >> (IMM_BITS - 1):
         imm -= 1 << IMM_BITS
@@ -146,7 +161,7 @@ def decode(word: int) -> Instr:
 
 
 def format_instr(ins: Instr) -> str:
-    spec = OPS[ins.op]
+    spec = ALL_OPS[ins.op]
     vals = {"a": ins.a, "b": ins.b, "c": ins.c, "imm": ins.imm}
     parts = []
     for kind, fld in FORMATS[spec.fmt]:
@@ -164,8 +179,8 @@ def format_instr(ins: Instr) -> str:
 
 def written_registers(ins: Instr) -> tuple[str, int] | None:
     """('R'|'X', index) of the register `ins` writes, or None."""
-    fmt = OPS[ins.op].fmt
-    if ins.op == "ST" or fmt in ("N", "L", "XXL", "RL"):
+    fmt = ALL_OPS[ins.op].fmt
+    if ins.op == "ST" or fmt in ("N", "L", "XXL", "RL", "III"):
         return None
     kind = FORMATS[fmt][0][0]
     return ("R" if kind == "r" else "X", ins.a)

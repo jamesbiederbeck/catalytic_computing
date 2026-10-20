@@ -127,3 +127,167 @@ def owner_job(name: str, n: int, x: int, c: int, h: tuple[int, int, int],
     return Job(name, [Variant(owner_program(n), "private")],
                {"x": x, "c": c, "h0": h[0], "h1": h[1], "h2": h[2]},
                lane=lane, after=after, expect=owner_expected(n, x, c, h))
+
+
+# ── dynamic leases (RFC-003 A4): the program takes its own lease ─────────────
+
+def gate_dynamic(owner: int, bank: int, tail: int = 0,
+                 restore: bool = True) -> ProgramImage:
+    """gate_clean with its masks in owner's bank, taken by BORROW and given
+    back by RELEASE; `tail` NOPs after RELEASE (the lease is already back
+    while they run)."""
+    from .asm import assemble
+    loop = PR._clean_loop("loop", PR.A, PR.B, PR.K, PR.Y, WINDOW, WINDOW + 1,
+                          WINDOW + 2, 1, 3)
+    if not restore:
+        loop = loop.replace(f"MULI  R{WINDOW}, R{WINDOW}, {PR.OMEGA}",
+                            f"MULI  R{WINDOW}, R{WINDOW}, 9", 1)
+    src = (f".entry main\nmain:   BORROW {owner}, {bank}, 3\n"
+           f"        LIX   X3, {PR.M if restore else 15}{loop}\n"
+           "        RELEASE\n" + "        NOP\n" * tail + "        HALT\n")
+    a = assemble(src, ext=True)
+    ins = {"a": PR.A, "b": PR.B, "k0": 3, "k1": 4, "k2": 5, "k3": 6, "y": PR.Y}
+    return ProgramImage(CORE.p, CORE.q, a.words, a.entry, a.handler,
+                        inputs=ins, outputs={"y": PR.Y},
+                        listing=[str(i) for i in a.instrs])
+
+
+def gate_dynamic_claim():
+    from ..analysis.lease_proof import Claim
+    ins = {"a": PR.A, "b": PR.B, "k0": 3, "k1": 4, "k2": 5, "k3": 6}
+    return Claim.of({PR.Y: PR.expected_gain(ins)})
+
+
+def dynamic_job(name: str, owner: int, bank: int, tt: int, a: int, b: int,
+                y: int, lane: int, tail: int = 0, arrival: int = 0,
+                restore: bool = True) -> Job:
+    img = gate_dynamic(owner, bank, tail, restore)
+    return Job(name, [Variant(img, "dynamic", claim=gate_dynamic_claim())],
+               {**PR.gate_inputs(tt, a, b), "y": y}, lane=lane,
+               arrival=arrival, expect={"y": (y + gate(tt, a, b)) % P})
+
+
+# ── register-pressure variants (RFC-003 A5) ──────────────────────────────────
+#
+# The same computation in four forms, renumbered so that a program's
+# private register footprint is its highest register (what a lane budget
+# limits). Gate: inputs a, b, k0..k3 in R1..R6, y in R7. Tree: a..d, three
+# sets of k in R1..R16, y in R17.
+#
+#   direct   one temporary (gate) or three (tree): 8 / 20 registers
+#   clean    the projection, catalytic registers private: 10 / 22
+#   leased   the projection, catalytic registers borrowed: 7 / 17 + 3 / 5
+#   spill    direct, with inputs parked in data memory while their
+#            registers serve as temporaries: 7 / 17 + 1 / 5 data words.
+#            Not covered by the clean proof (LD/ST); checked against the
+#            oracle and for restored inputs in the tests.
+
+GATE_C = {"a": 1, "b": 2, "k0": 3, "k1": 4, "k2": 5, "k3": 6, "y": 7}
+TREE_Y = 17
+
+
+def _asm_image(src: str, inputs: dict, outputs: dict) -> ProgramImage:
+    from .asm import assemble
+    a = assemble(src)
+    return ProgramImage(CORE.p, CORE.q, a.words, a.entry, a.handler,
+                        inputs=dict(inputs), outputs=dict(outputs),
+                        listing=[str(i) for i in a.instrs])
+
+
+def gate_variants() -> dict[str, tuple[ProgramImage, int, int]]:
+    """kind -> (image, window registers, spill words)."""
+    lg = leased(PR.gate_clean())
+    spill = _asm_image("""
+        ST    R3, [X0+0]        ; park k0; R3 is the temporary
+        MUL   R3, R6, R1
+        ADD   R3, R3, R5
+        MUL   R3, R3, R2
+        MAC   R3, R4, R1
+        ADD   R7, R7, R3
+        LD    R3, [X0+0]        ; k0 back
+        ADD   R7, R7, R3
+        HALT
+""", GATE_C, {"y": 7})
+    return {
+        "direct": (relocate(PR.gate_direct().image, {9: 7, 10: 8}), 0, 0),
+        "clean": (relocate(PR.gate_clean().image,
+                           {9: 7, 7: 8, 8: 9, 16: 10}), 0, 0),
+        "leased": (relocate(lg.image, {9: 7}), 3, 0),
+        "spill": (spill, 0, 1),
+    }
+
+
+def tree_variants() -> dict[str, tuple[ProgramImage, int, int]]:
+    lt = leased(PR.tree_clean())
+    ins = {k: r for k, r in PR._tree_in().items()} | {"y": TREE_Y}
+    spill = _asm_image("""
+        ST    R1, [X0+0]        ; a
+        ST    R5, [X0+1]        ; g1 k0; R5 becomes u
+        MAC   R5, R6, R1
+        MAC   R5, R7, R2
+        MUL   R1, R1, R2        ; a b
+        MAC   R5, R8, R1        ; u = g1(a, b)
+        ST    R3, [X0+2]        ; c
+        ST    R9, [X0+3]        ; g2 k0; R9 becomes v
+        MAC   R9, R10, R3
+        MAC   R9, R11, R4
+        MUL   R3, R3, R4
+        MAC   R9, R12, R3       ; v = g2(c, d)
+        ST    R13, [X0+4]       ; f k0; R13 becomes f(u, v)
+        MAC   R13, R14, R5
+        MAC   R13, R15, R9
+        MUL   R5, R5, R9
+        MAC   R13, R16, R5
+        ADD   R17, R17, R13
+        LD    R1, [X0+0]
+        LD    R5, [X0+1]
+        LD    R3, [X0+2]
+        LD    R9, [X0+3]
+        LD    R13, [X0+4]
+        HALT
+""", ins, {"y": TREE_Y})
+    return {
+        "direct": (relocate(PR.tree_direct().image,
+                            {21: 17, 17: 18, 18: 19, 22: 20}), 0, 0),
+        "clean": (relocate(PR.tree_clean().image,
+                           {21: 17, 17: 18, 18: 19, 19: 20, 20: 21}), 0, 0),
+        "leased": (relocate(lt.image, {21: 17}), 5, 0),
+        "spill": (spill, 0, 5),
+    }
+
+
+def footprint(image: ProgramImage, window: int) -> int:
+    from .lease import referenced
+    win = set(range(WINDOW, WINDOW + window))
+    return max((referenced(image) | set(image.inputs.values())
+                | set(image.outputs.values())) - win)
+
+
+def pressure_job(name: str, kind: str, tt_or_tree, bits, y: int,
+                 kinds: tuple[str, ...], lane=None, arrival: int = 0) -> Job:
+    """A gate (tt_or_tree an int) or tree (a (f, g1, g2) triple) job offered
+    in the listed forms; the claim for the leased form is proven before a
+    lease (A3)."""
+    from ..analysis.lease_proof import Claim
+    tree = isinstance(tt_or_tree, tuple)
+    vs = (tree_variants() if tree else gate_variants())
+    if tree:
+        f, g1, g2 = tt_or_tree
+        ins = {**PR.tree_inputs(f, g1, g2, *bits), "y": y}
+        want = (y + gate(f, gate(g1, bits[0], bits[1]),
+                         gate(g2, bits[2], bits[3]))) % P
+    else:
+        ins = {**PR.gate_inputs(tt_or_tree, *bits), "y": y}
+        want = (y + gate(tt_or_tree, *bits)) % P
+    # the private clean form reads its masks from host-written registers
+    mrng = random.Random(name)
+    ins.update({k: mrng.randrange(P) for k in
+                (("t1", "t2", "tl", "tr", "s") if tree else ("t1", "t2", "s"))})
+    out = []
+    for k in kinds:
+        img, win, words = vs[k]
+        claim = (Claim.of({img.outputs["y"]: PR.expected_gain(img.inputs)})
+                 if win else None)
+        out.append(Variant(img, k, window=win, claim=claim))
+    return Job(name, out, ins, lane=lane, arrival=arrival,
+               expect={"y": want})

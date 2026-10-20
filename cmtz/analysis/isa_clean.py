@@ -41,6 +41,8 @@ from ..isa.encoding import NUM_R, NUM_X, STACK_DEPTH, X_BITS, decode
 from ..isa.image import ProgramImage
 
 XMASK = (1 << X_BITS) - 1
+WINDOW = 24             # isa/lease.py: a BORROW maps R24.. to the owner
+LEASE_VAR = 64          # names for the values a BORROW finds (R24 -> 64, ...)
 
 Mono = tuple[tuple[int, int], ...]          # ((register, exponent), ...)
 
@@ -137,13 +139,23 @@ class SymRun:
     cycles: int
     # entry registers whose values reached a field operation
     reads: set[int] = field(default_factory=set)
+    borrows: list = field(default_factory=list)     # (owner, bank, count)
 
 
-def run_symbolic(image: ProgramImage, max_steps: int = 2_000_000) -> SymRun:
+def run_symbolic(image: ProgramImage, max_steps: int = 2_000_000,
+                 ext: bool = False) -> SymRun:
     """Execute `image` from its entry to HALT with symbolic field registers.
-    Raises CleanProofError where the path or a value cannot be followed."""
+    Raises CleanProofError where the path or a value cannot be followed.
+
+    With `ext` (multilane lanes, RFC-003 A4) BORROW makes R24 .. R24+n-1
+    fresh variables (whatever the owner holds; the private values there are
+    set aside), and RELEASE, or HALT while borrowing, requires each of them
+    to be its own variable again before the private values come back: the
+    borrowed registers are restored for every value they can hold."""
     p = image.p
-    code = [decode(w) for w in image.words]
+    code = [decode(w, ext) for w in image.words]
+    lease: list | None = None           # private values set aside
+    borrows: list = []
     R = [Poly.var(p, r) for r in range(NUM_R)]
     X: list[int | None] = [0] + [None] * (NUM_X - 1)
     pc, stack, retired, cycles = image.entry, [], 0, 0
@@ -179,10 +191,28 @@ def run_symbolic(image: ProgramImage, max_steps: int = 2_000_000) -> SymRun:
             reads |= R[a].variables() | R[b].variables() | R[c].variables()
         elif op in ("MULI", "BZ", "BNZ"):
             reads |= R[b if op == "MULI" else a].variables()
+        if op in ("HALT", "RELEASE") and lease is not None:
+            for i in range(len(lease)):
+                if R[WINDOW + i] != Poly.var(p, LEASE_VAR + i):
+                    fail(f"borrowed R{WINDOW + i} is {R[WINDOW + i]} when the "
+                         f"lease ends, not the value BORROW found")
+            for i, v in enumerate(lease):
+                R[WINDOW + i] = v
+            lease = None
+        elif op == "RELEASE":
+            fail("RELEASE without a lease")
         if op == "HALT":
-            return SymRun(R, X, retired + 1, cycles, reads)
-        if op == "NOP":
+            return SymRun(R, X, retired + 1, cycles,
+                          {r for r in reads if r < NUM_R}, borrows)
+        if op == "NOP" or op == "RELEASE":
             pass
+        elif op == "BORROW":
+            if lease is not None:
+                fail("BORROW while holding a lease")
+            lease = [R[WINDOW + i] for i in range(c)]
+            for i in range(c):
+                R[WINDOW + i] = Poly.var(p, LEASE_VAR + i)
+            borrows.append((a, b, c))
         elif op == "ADD":
             setr(a, R[b] + R[c])
         elif op == "SUB":
@@ -248,7 +278,8 @@ class CleanReport:
 
 def verify_clean(image: ProgramImage, catalytic: list[int],
                  gains: dict[int, Poly], temps: list[int],
-                 supplied: tuple[int, ...] = ()) -> CleanReport:
+                 supplied: tuple[int, ...] = (), ext: bool = False
+                 ) -> CleanReport:
     """Prove that `image` adds `gains[r]` to each output register r, brings
     every catalytic register back, and changes nothing else except `temps`
     (and index registers), for every entry value in [0, p).
@@ -262,7 +293,7 @@ def verify_clean(image: ProgramImage, catalytic: list[int],
     every violation.
     """
     p = image.p
-    run = run_symbolic(image)
+    run = run_symbolic(image, ext=ext)
     errs = []
     for r in catalytic:
         if run.R[r] != Poly.var(p, r):

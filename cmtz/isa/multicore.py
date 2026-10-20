@@ -72,12 +72,18 @@ from .sim import E_PC, E_STEPS, ERROR, HALTED, RUNNING, Machine
 
 E_ABORT = 7             # the core's code for a host abort
 E_BUDGET = 8            # simulator only: register beyond the lane's budget
+E_LEASE = 9             # simulator only: invalid BORROW or RELEASE (A4)
 
 FETCH, EXEC = "fetch", "exec"
 
 
 class RegisterFault(Exception):
     pass
+
+
+def _borrows(image: ProgramImage) -> bool:
+    from .encoding import decode
+    return any(decode(w, ext=True).op == "BORROW" for w in image.words)
 
 
 @dataclass
@@ -183,6 +189,8 @@ class _Lane:
     stalls: int = 0
     stall_since: int = 0
     wants: frozenset = frozenset()            # physical regs it waits for
+    borrow_since: Optional[int] = None        # waiting in BORROW since
+    returned: list = field(default_factory=list)  # (lease, restored) this job
     irq: set = field(default_factory=set)
     busy: int = 0
     retired: int = 0
@@ -240,6 +248,8 @@ class MultiCore:
         self.poison_of: dict[int, _Active] = {}   # borrower -> poisoned lease
         self.queue: list[Job] = []
         self.done: dict[str, JobResult] = {}
+        self.rejected: dict[str, list[str]] = {}
+        self._estimates: dict[int, int] = {}
         self.trace: list[dict] = []
         self.decisions: list[dict] = []
         self.rng = random.Random(seed)
@@ -327,8 +337,11 @@ class MultiCore:
                 return False
         return True
 
-    def lease_problems(self, borrower: int, lease: Lease) -> list[str]:
-        """Why `lease` cannot be acquired for `borrower` now ([] if it can)."""
+    def lease_problems(self, borrower: int, lease: Lease,
+                       skip: frozenset = frozenset()) -> list[str]:
+        """Why `lease` cannot be acquired for `borrower` now ([] if it can).
+        Registers another lane is waiting for count as taken, except for the
+        lanes in `skip` (behind the borrower in the BORROW queue)."""
         errs = []
         o = lease.owner
         if not 0 <= o < self.n or o == borrower:
@@ -340,7 +353,8 @@ class MultiCore:
                         "and borrows at once)")
         if any(i // NUM_R == borrower for i in set(self.holder) | self.poisoned):
             errs.append(f"lane {borrower} is lending")
-        wanted = set().union(*(ln.wants for ln in self.lanes))
+        wanted = set().union(*(ln.wants for ln in self.lanes
+                               if ln.idx != borrower and ln.idx not in skip))
         for r in lease.regs:
             if r > self.lanes[o].cfg.private:
                 errs.append(f"R{r} does not exist on lane {o}")
@@ -355,8 +369,9 @@ class MultiCore:
         return errs
 
     def acquire(self, borrower: int, lease: Lease, t: int,
-                cert: Optional[str] = None) -> list[str]:
-        errs = self.lease_problems(borrower, lease)
+                cert: Optional[str] = None,
+                skip: frozenset = frozenset()) -> list[str]:
+        errs = self.lease_problems(borrower, lease, skip)
         if not errs:
             phys = tuple(lease.owner * NUM_R + r for r in lease.regs)
             vals = [self.P[i] for i in phys]
@@ -409,6 +424,7 @@ class MultiCore:
         self.stats["poison"] += 1
         self._ev(t, "poison", borrower, owner=a.lease.owner,
                  phys=list(a.phys))
+        self._wake(set(), t)
 
     def clear_poison(self, owner: int, values: dict[int, int]) -> None:
         """Host recovery: put restored values back into the owner's
@@ -425,6 +441,7 @@ class MultiCore:
             if not set(a.phys) & self.poisoned:
                 del self.poison_of[b]
         self._ev(self.t, "clear_poison", owner, regs=sorted(values))
+        self._wake({owner * NUM_R + r for r in values}, self.t)
 
     def cancel(self, borrower: int) -> None:
         """Host: drop a lease whose borrower has not run since it was
@@ -434,10 +451,21 @@ class MultiCore:
             del self.holder[i]
         self._ev(self.t, "cancel", borrower, owner=a.lease.owner,
                  phys=list(a.phys))
+        self._wake(set(a.phys), self.t)
+
+    def _requeue(self, t: int) -> None:
+        for ln in self.lanes:
+            if ln.job and ln.t is None and ln.borrow_since is not None:
+                ln.stalls += t - ln.stall_since
+                ln.t = t
+                self._ev(t, "resume", ln.idx, stalled=t - ln.stall_since)
 
     def _wake(self, phys: set[int], t: int) -> None:
+        """Resume lanes stalled on `phys`, and every lane waiting in BORROW
+        (whatever blocked it may have changed)."""
         for ln in self.lanes:
-            if ln.job and ln.t is None and ln.wants & phys:
+            if ln.job and ln.t is None and (ln.wants & phys
+                                            or ln.borrow_since is not None):
                 ln.stalls += t - ln.stall_since
                 ln.t = t
                 self._ev(t, "resume", ln.idx, stalled=t - ln.stall_since)
@@ -461,7 +489,7 @@ class MultiCore:
                                [lease.owner, list(lease.regs)]})
         self.queue.remove(job)
         ln.job, ln.variant = job, v
-        m = Machine(self.core, v.image)
+        m = Machine(self.core, v.image, ext=True)
         m.R, m.X, m.D = _RegView(self, ln.idx), ln.X, ln.D
         m.start()
         ins = {k: val for k, val in job.inputs.items() if k in v.image.inputs}
@@ -472,6 +500,7 @@ class MultiCore:
             raise RuntimeError(f"{job.name}: an input register is leased out")
         ln.m, ln.phase, ln.t, ln.start = m, FETCH, start, start
         ln.stalls, ln.wants, ln.irq = 0, frozenset(), set(job.irq_at)
+        ln.borrow_since, ln.returned = None, []
         self._ev(t, "dispatch", ln.idx, job=job.name, kind=v.kind,
                  start=start, lease=None if lease is None
                  else [lease.owner, list(lease.regs)])
@@ -498,16 +527,28 @@ class MultiCore:
                     raise RuntimeError(f"replay: lease for {job.name} refused")
                 self._start(ln, job, d["variant"], lease, t, d["start"])
                 continue
-            jobs = self._eligible(ln.idx, t)
-            if not jobs:
-                continue
-            if self.randomize:
-                self.rng.shuffle(jobs)
-            pick = self.policy(self, ln.idx, t, jobs)
-            if pick is None:
-                continue
-            job, vi, lease = pick
-            self._start(ln, job, vi, lease, t)
+            while True:
+                jobs = self._eligible(ln.idx, t)
+                if not jobs:
+                    break
+                if self.randomize:
+                    self.rng.shuffle(jobs)
+                pick = self.policy(self, ln.idx, t, jobs)
+                if pick is None:
+                    break
+                job, vi, lease = pick
+                v = job.variants[vi]
+                if self.accept is not None and _borrows(v.image):
+                    errs = self.accept.program(v)
+                    if errs:
+                        # a program that borrows by itself must be proven
+                        # before it is dispatched; this one is not
+                        self.queue.remove(job)
+                        self.rejected[job.name] = errs
+                        self._ev(t, "reject", ln.idx, job=job.name, why=errs)
+                        continue
+                self._start(ln, job, vi, lease, t)
+                break
 
     def try_lease(self, lane: int, v: Variant, lease: Lease, t: int) -> bool:
         """Acquire `lease` for running `v` on `lane`, after the window and
@@ -529,6 +570,11 @@ class MultiCore:
         m, job = ln.m, ln.job
         end = t + 1
         lease = self.active[ln.idx].lease if ln.idx in self.active else None
+        restored = None
+        if ln.returned:             # leases it took and gave back itself
+            lease = lease or ln.returned[-1][0]
+            oks = [ok for _, ok in ln.returned]
+            restored = None if None in oks else all(oks)
         outs = {}
         for k, r in m.image.outputs.items():
             try:
@@ -537,7 +583,7 @@ class MultiCore:
                 pass
         res = JobResult(job.name, ln.idx, ln.variant.kind, ln.start, end,
                         m.retired, ln.stalls, m.status, m.error, outs, lease,
-                        None, m.cycles)
+                        restored, m.cycles)
         self.done[job.name] = res
         ln.busy += end - ln.start
         ln.retired += m.retired
@@ -545,7 +591,7 @@ class MultiCore:
         self._ev(t, "end", ln.idx, job=job.name, status=m.status,
                  error=m.error, retired=m.retired, cycles=end - ln.start,
                  stalls=ln.stalls)
-        if lease is not None:
+        if ln.idx in self.active:
             # a lease comes back only from a job that halted; anything else
             # poisons it. Both take effect at the next cycle boundary.
             self._releases.append((end, ln.idx, m.status == HALTED))
@@ -579,6 +625,8 @@ class MultiCore:
             ln.phase, ln.t = EXEC, t + 1
             return
         ins = m.code[m.pc]
+        if ins.op in ("BORROW", "RELEASE"):
+            return self._lease_op(ln, ins, t)
         try:
             phys = [self.phys(ln.idx, r) for r in referenced_registers(ins)]
         except RegisterFault as e:
@@ -592,6 +640,10 @@ class MultiCore:
             self._ev(t, "stall", ln.idx, pc=m.pc, phys=sorted(blocked),
                      poisoned=bool(blocked & self.poisoned))
             return
+        if ln.wants:
+            # it waited for these registers and now uses them: a BORROW
+            # queued behind it may go next cycle
+            self._requeue(t + 1)
         ln.wants = frozenset()
         if self.trace_access:
             self._ev(t, "access", ln.idx, phys=sorted(
@@ -606,6 +658,74 @@ class MultiCore:
             return self._fail(ln, t, E_ABORT)
         ln.phase = FETCH
         ln.t = t + (2 if ins.op == "LD" else 1)
+
+    def _lease_op(self, ln: _Lane, ins, t: int) -> None:
+        """BORROW owner, bank, count / RELEASE (multilane extension, A4).
+
+        BORROW faults (E_LEASE) on a request that can never succeed: an
+        owner that is this lane or does not exist, bank outside 1..3, count
+        outside 1..8, registers the owner does not have, a second lease
+        (this lane already holds one, or a poisoned one), or a leased value
+        outside [0, p) (fail closed). It waits while the request is
+        well-formed but busy: registers held, poisoned (until cleared) or
+        wanted by a lane that waits longer, the owner borrowing, this lane
+        lending. Waiters retry at every lease change, oldest first (lane
+        index breaks ties), so no request is overtaken forever; two
+        requests in the same cycle go in lane order. RELEASE without a
+        lease faults; with one it returns it at the next cycle boundary."""
+        m, lane = ln.m, ln.idx
+
+        def fault(why: str) -> None:
+            self._ev(t, "fault", lane, why=why)
+            self._fail(ln, t, E_LEASE)
+
+        def retire() -> None:
+            ln.borrow_since = None
+            ln.wants = frozenset()
+            m.pc += 1
+            m.retired += 1
+            m.cycles += 2
+            ln.phase, ln.t = FETCH, t + 1
+            if m.retired >= ln.job.max_steps:
+                self._fail(ln, t, E_STEPS)
+
+        if ins.op == "RELEASE":
+            if lane not in self.active:
+                return fault("RELEASE without a lease")
+            self._ev(t, "release_req", lane)
+            self._releases.append((t + 1, lane, True))
+            return retire()
+        o, bank, n = ins.a, ins.b, ins.c
+        if not 0 <= o < self.n or o == lane:
+            return fault(f"BORROW from lane {o}")
+        if not 1 <= bank <= 3 or not 1 <= n <= 8:
+            return fault(f"BORROW bank {bank} count {n}")
+        if lane in self.active or lane in self.poison_of:
+            return fault("BORROW while holding a lease")
+        lease = Lease.banked(o, bank, n)
+        if any(r > self.lanes[o].cfg.private for r in lease.regs):
+            return fault(f"lane {o} has no R{max(lease.regs)}")
+        since = t if ln.borrow_since is None else ln.borrow_since
+        later = frozenset(x.idx for x in self.lanes
+                          if x.borrow_since is not None and x.idx != lane
+                          and (x.borrow_since, x.idx) > (since, lane))
+        phys = tuple(o * NUM_R + r for r in lease.regs)
+        if self.lease_problems(lane, lease, skip=later):
+            if ln.borrow_since is None:
+                ln.borrow_since = since
+                self._ev(t, "borrow_wait", lane, owner=o, phys=list(phys))
+            ln.wants, ln.stall_since, ln.t = frozenset(phys), t, None
+            self.stats["stall_events"] += 1
+            self._ev(t, "stall", lane, pc=m.pc, phys=list(phys), borrow=True,
+                     poisoned=bool(set(phys) & self.poisoned))
+            return
+        vals = [self.P[i] for i in phys]
+        if any(v >= self.core.p for v in vals):
+            return fault(f"BORROW of values {vals} outside [0, p)")
+        if self.acquire(lane, lease, t, getattr(ln.variant.certificate, "key",
+                                                None), skip=later):
+            return fault("BORROW refused")
+        retire()
 
     def run(self, max_cycles: int = 10 ** 9,
             stop_at: Optional[int] = None) -> Report:
@@ -624,11 +744,16 @@ class MultiCore:
                 if not clean:
                     self._poison(b, t)
                     continue
+                lease = self.active[b].lease
                 ok = self._release(b, t)
-                if ok is not None:
+                ln = self.lanes[b]
+                if ln.job is not None:          # RELEASE: the job runs on
+                    ln.returned.append((lease, ok))
+                elif ok is not None:
                     for res in reversed(list(self.done.values())):
                         if res.lane == b and res.lease is not None:
-                            res.restored = ok
+                            res.restored = (ok if res.restored is None
+                                            else res.restored and ok)
                             break
             self._dispatch(t)
             for ln in self.lanes:
@@ -752,6 +877,67 @@ def dynamic_leases(mc: MultiCore, lane: int, t: int, jobs: list[Job]):
     return None
 
 
+def estimate(mc: MultiCore, job: Job, v: Variant) -> int:
+    """Cycles `v` takes on its own (the programs here are data-independent;
+    certificates give the same number). Cached per program."""
+    key = v.image.crc
+    if key not in mc._estimates:
+        m = Machine(mc.core, v.image, ext=True)
+        m.set_inputs({k: job.inputs.get(k, 0) for k in v.image.inputs})
+        m.run(max_steps=job.max_steps)
+        mc._estimates[key] = m.cycles
+    return mc._estimates[key]
+
+
+def lease_free_at(mc: MultiCore, t: int) -> Optional[int]:
+    """When the earliest active lease is expected back: its borrower's start
+    plus that job's estimate (None if no lease is held)."""
+    ends = []
+    for b in mc.active:
+        ln = mc.lanes[b]
+        if ln.job is not None:
+            ends.append(ln.start + estimate(mc, ln.job, ln.variant))
+    return max(t + 1, min(ends)) if ends else None
+
+
+def least_cost(mc: MultiCore, lane: int, t: int, jobs: list[Job]):
+    """Per job, the variant with the earliest estimated finish: one that can
+    start now (private, spill, recompute, or a lease free now), or a lease
+    that is busy, finishing at its expected release plus its run time. If
+    waiting wins, the job stays queued (and is retried when a lease comes
+    back); otherwise it starts. On a tie it does not borrow. Simulated
+    only (A4)."""
+    for job in jobs:
+        best = None
+        for vi, v in enumerate(job.variants):
+            if not mc.fits(lane, v) or not mc.inputs_free(lane, v):
+                continue
+            est = estimate(mc, job, v)
+            if v.borrows:
+                lease = v.lease or find_lease(mc, lane, v.window)
+                if lease is not None and not mc.lease_problems(lane, lease):
+                    cand = (t + est, 0, 1, vi, lease)
+                else:
+                    free = lease_free_at(mc, t)
+                    if free is None:
+                        continue
+                    cand = (free + est, 1, 1, vi, None)
+            else:
+                cand = (t + est, 0, 0, vi, None)
+            best = cand if best is None or cand < best else best
+        if best is None or best[1]:
+            continue                    # nothing runs here, or waiting wins
+        _, _, _, vi, lease = best
+        v = job.variants[vi]
+        if lease is not None and not mc.try_lease(lane, v, lease, t):
+            continue
+        mc._ev(t, "choose", lane, job=job.name, kind=v.kind,
+               est=estimate(mc, job, v))
+        return job, vi, lease
+    return None
+
+
 POLICIES: dict[str, Policy] = {"private": private_only,
                                "static": static_leases,
-                               "dynamic": dynamic_leases}
+                               "dynamic": dynamic_leases,
+                               "cost": least_cost}

@@ -20,7 +20,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from .encoding import FORMATS, NUM_R, OPS, decode, encode
+from .encoding import ALL_OPS, FORMATS, NUM_R, encode
+from .encoding import decode as _decode
+
+
+def decode(word: int):
+    return _decode(word, ext=True)
 from .image import ProgramImage
 
 WINDOW = 24             # first window register in the borrower
@@ -66,7 +71,7 @@ class Lease:
 
 def field_operands(op: str) -> list[str]:
     """Instruction fields ('a', 'b', 'c') holding field-register numbers."""
-    return [fld for kind, fld in FORMATS[OPS[op].fmt] if kind == "r"]
+    return [fld for kind, fld in FORMATS[ALL_OPS[op].fmt] if kind == "r"]
 
 
 def relocate(image: ProgramImage, mapping: dict[int, int],

@@ -76,12 +76,15 @@ class Machine:
     waiting: bool = False       # stalled on WAITI
     # (retired count, saved pc) at each dispatch; the core keeps the last
     dispatches: list[tuple[int, int]] = field(default_factory=list)
+    # decode the multilane extension too (a multicore lane executes it;
+    # here it is a bad opcode, as on the single core)
+    ext: bool = False
 
     def __post_init__(self):
-        self.image.validate(self.core)
+        self.image.validate(self.core, self.ext)
         if not self.D:
             self.D = [0] * self.core.dmem_size
-        self.code: list[Instr] = [decode(w) for w in self.image.words]
+        self.code: list[Instr] = [decode(w, self.ext) for w in self.image.words]
         self.pc = self.image.entry
 
     # ── host access ──────────────────────────────────────────────────
@@ -270,7 +273,7 @@ class Machine:
                 self.waiting = True
                 self.cycles_exact = False
                 return              # stall: no retire, pc unchanged
-        else:   # pragma: no cover - decode() rejects unknown opcodes
+        else:   # BORROW/RELEASE (ext): a single core does not know them
             return self._fail(E_OPCODE)
         self.pc = nxt
         self.retired += 1

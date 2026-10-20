@@ -50,7 +50,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from ..isa.encoding import (
-    BRANCH_OPS, FORMATS, LINEAR_OPS, NUM_R, OPS, Instr, decode,
+    ALL_OPS, BRANCH_OPS, FORMATS, LINEAR_OPS, NUM_R, OPS, Instr, decode,
     written_registers,
 )
 from ..isa.image import ProgramImage
@@ -91,7 +91,7 @@ class HandlerReport:
 
 def read_registers(ins: Instr) -> set[int]:
     """Field registers `ins` reads (R0 excluded)."""
-    fmt = OPS[ins.op].fmt
+    fmt = ALL_OPS[ins.op].fmt
     regs = {getattr(ins, fld) for kind, fld in FORMATS[fmt] if kind == "r"}
     w = written_registers(ins)
     if w and w[0] == "R" and ins.op not in ("MAC", "HORNER"):
@@ -102,7 +102,7 @@ def read_registers(ins: Instr) -> set[int]:
 
 
 def referenced_registers(ins: Instr) -> set[int]:
-    fmt = OPS[ins.op].fmt
+    fmt = ALL_OPS[ins.op].fmt
     return {getattr(ins, fld) for kind, fld in FORMATS[fmt] if kind == "r"} - {0}
 
 

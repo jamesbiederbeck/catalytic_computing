@@ -82,6 +82,7 @@ class Certificate:
     retired: int
     cycles: int
     handler: str
+    borrows: tuple = ()             # dynamic: (owner, bank, count) per BORROW
 
     @property
     def key(self) -> str:
@@ -136,6 +137,34 @@ def certify(image: ProgramImage, window: int, claim: Claim) -> Certificate:
                        handler)
 
 
+def certify_dynamic(image: ProgramImage, claim: Claim) -> Certificate:
+    """Prove a program that takes its own lease with BORROW and gives it
+    back with RELEASE (or at HALT): between the two, the borrowed registers
+    are fresh variables that must come back as themselves; outside, R24..
+    are the lane's own. Fails closed on what the proof cannot follow, on a
+    handler (not supported with dynamic leases), and on window registers
+    beyond the largest BORROW."""
+    code = [decode(w, ext=True) for w in image.words]
+    borrows = [i for i in code if i.op == "BORROW"]
+    errs = []
+    if not borrows:
+        raise LeaseRefused(["no BORROW in the program"])
+    window = max(i.c for i in borrows)
+    errs += window_conflicts(image, window)
+    if image.handler is not None:
+        errs.append("an interrupt handler with BORROW/RELEASE is not supported")
+    try:
+        rep = verify_clean(image, [], dict(claim.polys), list(claim.temps),
+                           ext=True)
+    except CleanProofError as e:
+        errs += e.violations
+    if errs:
+        raise LeaseRefused(errs)
+    return Certificate(image.crc, window, (), claim.gains, claim.temps,
+                       tuple(rep.requires_canonical), rep.retired, rep.cycles,
+                       "none", tuple((i.a, i.b, i.c) for i in borrows))
+
+
 def check_lease(cert: Certificate, image: ProgramImage, lease: Lease,
                 borrower: int, owner_image: Optional[ProgramImage] = None
                 ) -> list[str]:
@@ -186,6 +215,29 @@ class Checker:
         if isinstance(got, LeaseRefused):
             raise got
         return got
+
+    def program(self, v) -> list[str]:
+        """Accept a program that borrows by itself (BORROW/RELEASE), before
+        it is dispatched: its certificate, or the reasons it has none."""
+        if not isinstance(v.claim, Claim):
+            return ["no claim to prove: a lease is not granted on a "
+                    "program's word"]
+        key = (v.image.crc, "dynamic", v.claim)
+        if key in self.cache:
+            self.hits += 1
+        else:
+            self.proofs += 1
+            try:
+                self.cache[key] = certify_dynamic(v.image, v.claim)
+            except LeaseRefused as e:
+                self.cache[key] = e
+        got = self.cache[key]
+        if isinstance(got, LeaseRefused):
+            self.refused.append((v.image.listing[0] if v.image.listing else "",
+                                 got.violations))
+            return got.violations
+        v.certificate = got
+        return []
 
     def __call__(self, mc, lane: int, v, lease: Lease) -> list[str]:
         if not isinstance(v.claim, Claim):

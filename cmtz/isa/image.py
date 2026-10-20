@@ -14,7 +14,7 @@ import zlib
 from dataclasses import asdict, dataclass, field
 
 from .encoding import (
-    BRANCH_OPS, FORMATS, ISA_VERSION, NUM_R, NUM_X, OPS, decode,
+    ALL_OPS, BRANCH_OPS, FORMATS, ISA_VERSION, NUM_R, NUM_X, decode,
 )
 
 
@@ -67,8 +67,9 @@ class ProgramImage:
         data = b"".join(v.to_bytes(4, "big") for v in h + self.words)
         return zlib.crc32(data)
 
-    def validate(self, core: CoreConfig) -> None:
-        """Raise ValueError if this image cannot run on `core`."""
+    def validate(self, core: CoreConfig, ext: bool = False) -> None:
+        """Raise ValueError if this image cannot run on `core` (`ext`: a
+        multilane lane, which also knows BORROW and RELEASE)."""
         errs = []
         if self.isa_version != core.isa_version:
             errs.append(f"ISA version {self.isa_version}, core has {core.isa_version}")
@@ -82,11 +83,11 @@ class ProgramImage:
                 errs.append(f"{what} {pc} outside the program")
         for i, w in enumerate(self.words):
             try:
-                ins = decode(w)
+                ins = decode(w, ext)
             except ValueError as e:
                 errs.append(f"word {i}: {e}")
                 continue
-            for kind, fld in FORMATS[OPS[ins.op].fmt]:
+            for kind, fld in FORMATS[ALL_OPS[ins.op].fmt]:
                 v = getattr(ins, fld if kind != "m" else "b")
                 if kind == "r" and v >= NUM_R or kind in "xm" and v >= NUM_X:
                     errs.append(f"word {i}: register {v} out of range")

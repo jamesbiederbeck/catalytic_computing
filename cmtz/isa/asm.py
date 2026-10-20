@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .encoding import FORMATS, OPS, Instr, NUM_R, NUM_X, encode
+from .encoding import ALL_OPS, FORMATS, OPS, Instr, NUM_R, NUM_X, encode
 
 
 class AsmError(ValueError):
@@ -78,7 +78,9 @@ def _split_operands(text: str) -> list[str]:
     return out
 
 
-def assemble(*sources: str) -> Assembled:
+def assemble(*sources: str, ext: bool = False) -> Assembled:
+    """`ext=True` also accepts the multilane extension (BORROW, RELEASE)."""
+    known = ALL_OPS if ext else OPS
     stmts: list[tuple[str, list[str], str]] = []    # (op, operands, line)
     labels: dict[str, int] = {}
     directives: dict[str, str] = {}
@@ -101,7 +103,7 @@ def assemble(*sources: str) -> Assembled:
                 directives[head] = rest.strip()
                 continue
             op = head.upper()
-            if op not in OPS:
+            if op not in known:
                 raise AsmError(f"line {lineno}: unknown instruction {head!r}")
             stmts.append((op, _split_operands(rest), raw.strip()))
 
@@ -112,7 +114,7 @@ def assemble(*sources: str) -> Assembled:
 
     instrs: list[Instr] = []
     for op, ops, line in stmts:
-        kinds = FORMATS[OPS[op].fmt]
+        kinds = FORMATS[known[op].fmt]
         if len(ops) != len(kinds):
             raise AsmError(f"{line!r}: {op} takes {len(kinds)} operands")
         f = {"a": 0, "b": 0, "c": 0, "imm": 0}

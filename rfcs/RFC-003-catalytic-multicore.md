@@ -356,3 +356,84 @@ too.
 A debug snapshot (`MultiCore(snapshot=True)`) compares leased values at
 release. Its storage (`Report.snapshot_bits`) is reported separately and
 never counted as workspace.
+
+### A4: dynamic leases (simulator only)
+
+**Opcodes.** `BORROW owner, bank, count` (opcode 28, three small
+immediates in fields a, b, c) and `RELEASE` (opcode 29, no operands). They
+sit in `encoding.EXT_OPS`, *outside* `OPS`:
+
+- the single-core generator, assembler and simulator do not know them;
+- `cmtz_core.v` is unchanged, and its hash test still passes;
+- a single core that meets one reports a bad opcode, as the RTL would;
+- `assemble(..., ext=True)`, `decode(..., ext=True)` and
+  `Machine(..., ext=True)` accept them, and `multicore.py` executes them.
+
+The format follows the A2 hardware lease: bank and count, with the owner as
+a lane number.
+
+**Semantics** (`MultiCore._lease_op`):
+
+| Case | Behaviour |
+|---|---|
+| a lease that is free | acquired in EXEC; window R24.. maps to the owner's bank from the next instruction on |
+| busy: registers held, poisoned, or wanted by an older waiter; owner borrowing; this lane lending | stall in EXEC and retry at every lease change |
+| two requests in one cycle | lane order |
+| waiters | served oldest first, so no request is overtaken forever (tested with three lanes) |
+| invalid: owner = self or no such lane, bank ∉ 1..3, count ∉ 1..8, registers the owner lacks | fault, `E_LEASE` |
+| second lease (double borrow, or a poisoned one still held) | fault |
+| a leased value outside [0, p) | fault (fail closed) |
+| `RELEASE` | the registers come back at the next cycle boundary; the lane runs on |
+| `RELEASE` without a lease (double release) | fault |
+| `HALT` while holding | release, as in A2 |
+| any other end while holding (fault, abort, step limit) | poison |
+| owner halts while lending | allowed; its next job stalls on the registers until they come back |
+
+**Deadlock.** The A0 rule still holds: a lane never lends and borrows at
+once. A lender that executes `BORROW` waits until its own registers come
+back. Every wait therefore ends at a borrower, which never waits; the
+three-lane case is tested.
+
+**Proof.** `run_symbolic(..., ext=True)` gives the window fresh variables
+at `BORROW`, setting the lane's own R24.. values aside. At `RELEASE`, or
+at `HALT` while borrowing, each borrowed register must equal its variable
+again, and then the private values come back.
+`lease_proof.certify_dynamic` runs the clean-computation proof on that
+basis. A `Checker` in the scheduler refuses to *dispatch* a program that
+contains `BORROW` until it is certified. Refused cases:
+
+- a register not restored at `RELEASE`, or at `HALT`;
+- a nested `BORROW`, or `RELEASE` without a lease;
+- a branch on a borrowed value, or `ST` of one;
+- a handler in a program that borrows.
+
+**Policy** `least_cost` (`MultiCore(policy="cost")`) chooses between
+borrowing, waiting, spilling, recomputing or running privately. For each
+variant it estimates the finish time:
+
+- start now for anything that fits the lane's budget, or for a lease that
+  is free now;
+- otherwise, for a busy lease, the expected release plus the run time.
+
+If waiting is quickest, the job stays queued. On a tie it does not borrow.
+In the tests:
+
+- with a 7-register budget it picks the gate's spill form (19 cycles) over
+  borrowing (614);
+- with only borrowing able to fit, it borrows;
+- with a 10-register budget it runs the clean gate privately rather than
+  borrow;
+- two trees on 17-register lanes, with one bank to lend: the second waits
+  for the lease.
+
+- **Mathematics or proof.** Dynamic programs are proven restoring, between
+  `BORROW` and `RELEASE`, for every register value in [0, p).
+- **Simulator** (`test_dynamic_leases.py`, 33 tests): every case in the
+  table above, the policy cases, and 4 seeded random mixes on 4 lanes
+  (16 dynamic jobs each, random owners, arrivals and tail lengths). Every
+  lease came back, every output matched the oracle, and no invariant broke.
+- **RTL and board.** Not built. The A2 hardware already takes 75 % more
+  logic than independent lanes. A runtime `BORROW` adds a request queue and
+  arbitration in front of the same array, and nothing measured so far
+  (A5) makes leases pay for themselves. This is the open blocker, not a
+  claim.
