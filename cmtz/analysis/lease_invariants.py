@@ -93,6 +93,15 @@ def check_trace(trace: list[dict]) -> list[str]:
                 if a["values"] != e["values"]:
                     errs.append(f"t={t}: lane {lane} returns {e['values']}, "
                                 f"borrowed {a['values']}")
+        elif ev == "cancel":
+            a = leases.pop(lane, None)
+            if a is None or lane in running:
+                errs.append(f"t={t}: cancel of lane {lane}'s lease while it "
+                            "runs or without one")
+            elif ended.get(lane) and ended[lane]["t"] > a["t"]:
+                errs.append(f"t={t}: cancel after lane {lane} ran with the lease")
+            for i in (a or {}).get("phys", []):
+                held.pop(i, None)
         elif ev == "clear_poison":
             for r in e["regs"]:
                 poisoned.discard(lane * REGS_PER_LANE + r)

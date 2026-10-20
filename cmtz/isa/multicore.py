@@ -235,6 +235,7 @@ class MultiCore:
         self.holder: dict[int, int] = {}      # physical reg -> borrower lane
         self.poisoned: set[int] = set()
         self.active: dict[int, _Active] = {}  # borrower lane -> lease
+        self.poison_of: dict[int, _Active] = {}   # borrower -> poisoned lease
         self.queue: list[Job] = []
         self.done: dict[str, JobResult] = {}
         self.trace: list[dict] = []
@@ -330,13 +331,12 @@ class MultiCore:
         o = lease.owner
         if not 0 <= o < self.n or o == borrower:
             return [f"owner lane {o} invalid for borrower {borrower}"]
-        if borrower in self.active:
+        if borrower in self.active or borrower in self.poison_of:
             errs.append(f"lane {borrower} already holds a lease")
-        if o in self.active:
+        if o in self.active or o in self.poison_of:
             errs.append(f"owner lane {o} is borrowing (a lane never lends "
                         "and borrows at once)")
-        if any(h_owner == borrower for h_owner in
-               (i // NUM_R for i in self.holder)):
+        if any(i // NUM_R == borrower for i in set(self.holder) | self.poisoned):
             errs.append(f"lane {borrower} is lending")
         wanted = set().union(*(ln.wants for ln in self.lanes))
         for r in lease.regs:
@@ -397,6 +397,7 @@ class MultiCore:
 
     def _poison(self, borrower: int, t: int) -> None:
         a = self.active.pop(borrower)
+        self.poison_of[borrower] = a
         for i in a.phys:
             del self.holder[i]
             self.poisoned.add(i)
@@ -415,7 +416,19 @@ class MultiCore:
                 raise ValueError(f"R{r} <- {v}: outside [0, p)")
             self.P[i] = v
             self.poisoned.discard(i)
+        for b, a in list(self.poison_of.items()):
+            if not set(a.phys) & self.poisoned:
+                del self.poison_of[b]
         self._ev(self.t, "clear_poison", owner, regs=sorted(values))
+
+    def cancel(self, borrower: int) -> None:
+        """Host: drop a lease whose borrower has not run since it was
+        acquired (the registers come back untouched)."""
+        a = self.active.pop(borrower)
+        for i in a.phys:
+            del self.holder[i]
+        self._ev(self.t, "cancel", borrower, owner=a.lease.owner,
+                 phys=list(a.phys))
 
     def _wake(self, phys: set[int], t: int) -> None:
         for ln in self.lanes:
