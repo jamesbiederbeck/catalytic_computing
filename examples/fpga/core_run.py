@@ -336,7 +336,8 @@ def soundness(b: Board) -> None:
           f"(T at retired {st.disp_retired})")
     demo = PR.gate_clean()
     for t1, back in ((17, 0), (18, 1)):
-        vals = {**PR.gate_inputs(PR.GATES["AND"], 1, 1), "t1": 0, "t2": 5, "y": 3}
+        vals = {**PR.gate_inputs(PR.GATES["AND"], 1, 1), "t1": 0, "t2": 5,
+                "s": 9, "y": 3}
         b.link.load(demo.image)
         for k, v in vals.items():
             b.link.write_reg(demo.image.inputs[k], v)
@@ -345,7 +346,7 @@ def soundness(b: Board) -> None:
         b.link.wait()
         out = b.link.outputs(demo.image)
         b.check(f"gate_clean, mask {t1}: comes back as {back}",
-                out == {"t1": back, "t2": 5, "y": 4}, f"{out}")
+                out == {"t1": back, "t2": 5, "s": 9, "y": 4}, f"{out}")
         print(f"{'gate_clean mask t1 = ' + str(t1):28} came back as {out['t1']}, "
               f"y = {out['y']}")
     print(f"{'soundness counterexamples':28}"

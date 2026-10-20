@@ -275,7 +275,8 @@ CORE = CoreConfig(17, 19)
 
 def core_readme(core: CoreConfig, project: str) -> str:
     status = ("Checked on the board with `examples/fpga/core_run.py` (2459 of 2459 checks,"
-              " including the roots-of-unity projection programs; see"
+              " including the roots-of-unity projection programs; 4 of them confirm"
+              " that register values outside F_p break restoration as predicted; see"
               " `docs/cmtz-projection.md` of this repo)."
               if project in ON_BOARD else "Not loaded on the board.")
     return f"""# {project}
