@@ -489,12 +489,26 @@ stream with:
 | gate | private, clean | 10 | 150 | 0 | 0 | 0 | 614 |
 | gate | private, spill | 7 | 135 | 5 | 0 | 0 | 19 |
 | gate | lease (static) | 7 | 135 | 0 | 94 | 3 | 614 |
+| gate | lease (dynamic policy: the scheduler picks the owner's registers) | 7 | 135 | 0 | 94 | 3 | 614 |
+| gate | BORROW/RELEASE in the program (A4) | 7 | 135 | 0 | 94 | 3 | 618 |
 | gate | least cost | 7 | 135 | 5 | 0 | 0 | 19 (picked spill) |
 | tree | private, direct | 20 | 200 | 0 | 0 | 0 | 34 |
 | tree | private, clean | 22 | 210 | 0 | 0 | 0 | 39 910 |
 | tree | private, spill | 17 | 185 | 25 | 0 | 0 | 53 |
 | tree | lease (static) | 17 | 185 | 0 | 94 | 5 | 39 910 |
 | tree | least cost | 17 | 185 | 25 | 0 | 0 | 53 (picked spill) |
+
+Notes on the table:
+
+- **Lease metadata.** The 94 bits are the model's register-list lease (8
+  register numbers per lane). The banked hardware lease of A2 is 18
+  flip-flops for two lanes.
+- **Dynamic rows.** Both dynamic forms reach the static lease's budget and
+  speed. `BORROW` and `RELEASE` add 4 cycles per job.
+- **Tree stream.** No `BORROW`/`RELEASE` tree program was written, so the
+  tree stream has no such row.
+
+Findings:
 
 - Borrowing does what it promises. It runs the computation with lane 1
   below the direct form's register count: 7 instead of 8 for a gate, 17
@@ -520,13 +534,13 @@ stream with:
 
 **Hardware** (`-noalu`, GW2AR-18: 20 736 LUT4):
 
-| Build | LUT4 | DFF | BSRAM | Fmax (MHz) | Board |
-|---|---|---|---|---|---|
-| `cmtz-core` | 2 918 | 690 | 2 | 114.9 | 2459/2459 (rerun at the end of this work) |
-| `cmtz-dual` | 5 030 | 1 132 | 4 | 104.0 | 958/958 |
-| `cmtz-lease` | 8 822 | 1 592 | 4 | 68.6 | 1733/1733, plus 626/626 proof-gated |
-| `cmtz-quad` | 9 048 | 1 627 | 8 | 110.9 | 468/468 (quick) + 252/252 |
-| `cmtz-quad-lease` | — | — | — | — | does not place: "Unable to find legal placement for all cells, design is probably at utilisation limit" |
+| Build | LUT4 | DFF | BSRAM | MULT (18×18 + 9×9) | Fmax (MHz) | Board |
+|---|---|---|---|---|---|---|
+| `cmtz-core` | 2 918 | 690 | 2 | 1 + 1 | 114.9 | 2459/2459 (rerun at the end of this work) |
+| `cmtz-dual` | 5 030 | 1 132 | 4 | 2 + 2 | 104.0 | 958/958 |
+| `cmtz-lease` | 8 822 | 1 592 | 4 | 2 + 2 | 68.6 | 1733/1733, plus 626/626 proof-gated |
+| `cmtz-quad` | 9 048 | 1 627 | 8 | 4 + 4 | 110.9 | 468/468 (quick) + 252/252 |
+| `cmtz-quad-lease` | — | — | — | — | — | does not place: "Unable to find legal placement for all cells, design is probably at utilisation limit" |
 
 Independent lanes cost close to one core each: 2 918, then about 2 060 more
 per lane. Leasing on four lanes does not fit the chip at all.
@@ -535,9 +549,10 @@ per lane. Leasing on four lanes does not fit the chip at all.
 
 1. **Lanes work and are cheap.** Two to four independent lanes are correct
    on the chip, cost about 2 000 LUT4 each, and raise peak IPC from 0.5 to
-   0.5 × lanes. Delivered throughput depends on keeping the lanes fed: 1.5×
-   at 4 lanes in the model with a job queue, and 1.06–1.26× in the board's
-   lockstep batches. Over the UART the host is the bottleneck.
+   0.5 × lanes. Delivered throughput depends on keeping the lanes fed. With
+   a job queue, the model gives 1.82× on 2 lanes, 3.05× on 4 (IPC 1.52)
+   and 4.6× on 8. The board's lockstep batches reached 1.06–1.26×. Over
+   the UART the host is the bottleneck.
 2. **Borrowing is correct, and a net loss here.**
    - It works on the chip: restoration is proven before a lease and
      observed after every one, values outside F_17 are refused, a failure

@@ -315,5 +315,7 @@ def test_storage_benchmark_gate():
         "private, clean": (10, ["clean"], 614, 0),
         "private, spill": (7, ["spill"], 19, 0),
         "lease (static)": (7, ["leased"], 614, 3),
+        "lease (dynamic, scheduler)": (7, ["leased"], 614, 3),
+        "BORROW/RELEASE (program)": (7, ["borrow"], 618, 3),
         "least cost (all forms)": (7, ["spill"], 19, 0),
     }

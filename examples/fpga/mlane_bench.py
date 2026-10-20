@@ -132,6 +132,8 @@ POLICY_FORMS = {
     "private, clean": ("private", ("clean",)),
     "private, spill": ("private", ("spill",)),
     "lease (static)": ("static", ("leased",)),
+    "lease (dynamic, scheduler)": ("dynamic", ("leased",)),
+    "BORROW/RELEASE (program)": ("private", ("borrow",)),
     "least cost (all forms)": ("cost", ("direct", "clean", "spill", "leased")),
 }
 
@@ -181,6 +183,8 @@ def storage_run(tree: bool, policy: str, forms: tuple, budget: int,
     vs = W.tree_variants() if tree else W.gate_variants()
     spill = max((vs[k][2] for k in kinds), default=0)
     window = max((vs[k][1] for k in kinds), default=0)
+    if "borrow" in kinds:
+        window = 3
     st = mc.storage()
     return {
         "budget": budget, "kinds": kinds,
@@ -204,6 +208,8 @@ def storage(tree: bool, seed: int) -> list[dict]:
     lo, hi = (14, 24) if tree else (5, 12)
     rows = []
     for name, (policy, forms) in POLICY_FORMS.items():
+        if tree and "program" in name:
+            continue        # no tree program with BORROW/RELEASE was written
         best = None
         for budget in range(hi, lo - 1, -1):
             r = storage_run(tree, policy, forms, budget, jobs, seed, owner_n)

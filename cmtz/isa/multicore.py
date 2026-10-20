@@ -319,8 +319,15 @@ class MultiCore:
             self._dispatch_at.add(j.arrival)
 
     def fits(self, lane: int, v: Variant) -> bool:
-        """The variant's private registers exist on the lane."""
-        win = set(range(WINDOW, WINDOW + v.borrows))
+        """The variant's private registers exist on the lane (a window, of
+        a lease the scheduler takes or one the program BORROWs, does not
+        count)."""
+        n = v.borrows
+        if _borrows(v.image):
+            from .encoding import decode
+            n = max(n, max(decode(w, ext=True).c for w in v.image.words
+                           if decode(w, ext=True).op == "BORROW"))
+        win = set(range(WINDOW, WINDOW + n))
         own = (referenced(v.image) | set(v.image.inputs.values())
                | set(v.image.outputs.values())) - win
         return max(own, default=0) <= self.lanes[lane].cfg.private

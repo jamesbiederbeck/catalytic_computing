@@ -214,6 +214,8 @@ def gate_variants() -> dict[str, tuple[ProgramImage, int, int]]:
                            {9: 7, 7: 8, 8: 9, 16: 10}), 0, 0),
         "leased": (relocate(lg.image, {9: 7}), 3, 0),
         "spill": (spill, 0, 1),
+        # takes lane 0's R16..R18 itself with BORROW / RELEASE (A4)
+        "borrow": (relocate(gate_dynamic(0, 2), {9: 7}), 0, 0),
     }
 
 
@@ -287,7 +289,7 @@ def pressure_job(name: str, kind: str, tt_or_tree, bits, y: int,
     for k in kinds:
         img, win, words = vs[k]
         claim = (Claim.of({img.outputs["y"]: PR.expected_gain(img.inputs)})
-                 if win else None)
+                 if win or k == "borrow" else None)
         out.append(Variant(img, k, window=win, claim=claim))
     return Job(name, out, ins, lane=lane, arrival=arrival,
                expect={"y": want})
