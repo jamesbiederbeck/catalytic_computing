@@ -601,11 +601,16 @@ class MultiCore:
         ln.phase = FETCH
         ln.t = t + (2 if ins.op == "LD" else 1)
 
-    def run(self, max_cycles: int = 10 ** 9) -> Report:
+    def run(self, max_cycles: int = 10 ** 9,
+            stop_at: Optional[int] = None) -> Report:
         """Run until every lane is idle and nothing more can start (a later
-        call continues from the same clock)."""
+        call continues from the same clock). `stop_at` pauses before that
+        cycle, to look at the state mid-run."""
         t = self.t
         while True:
+            if stop_at is not None and t >= stop_at:
+                self.t = t
+                return self.report()
             self.t = t
             for rel in sorted(r for r in self._releases if r[0] <= t):
                 self._releases.remove(rel)

@@ -113,3 +113,33 @@ class TestMlaneSimulation:
             "top.v": emit_mlane_uart(CORE, 2, False),
             "tb.v": emit_mlane_uart_testbench(CORE, 2, False, sc)})
         assert f"PASS: {len(sc)} scenes over the UART" in out, out[-2000:]
+
+    @pytest.mark.parametrize("lanes", [2, 4])
+    def test_leases(self, tmp_path, lanes):
+        ml = emit_mlane(CORE, lanes, True)
+        tb = emit_mlane_testbench(CORE, lanes, True,
+                                  standard_scenes(CORE, lanes, True, EXAMPLES))
+        out = sim(tmp_path, {"lane.v": ml.lane_source, "ml.v": ml.source,
+                             "tb.v": tb.source})
+        assert f"PASS: {tb.scenes} scenes" in out, out[-2000:]
+        stalls = [r.stalls for sc in tb.results for r in sc["results"].values()]
+        assert max(stalls) > 30000          # the tree scene stalls the owner
+        codes = [c for sc in tb.results for c in sc["codes"]]
+        assert {H.OK, H.BAD, H.RANGE} <= set(codes)
+
+    def test_lease_stall_mutation_fails(self, tmp_path):
+        ml = emit_mlane(CORE, 2, True)
+        tb = emit_mlane_testbench(CORE, 2, True, standard_scenes(CORE, 2, True),
+                                  break_stall=True)
+        out = sim(tmp_path, {"lane.v": ml.lane_source, "ml.v": ml.source,
+                             "tb.v": tb.source})
+        assert "FAIL" in out and "PASS" not in out
+
+    def test_lease_uart(self, tmp_path):
+        ml = emit_mlane(CORE, 2, True)
+        sc = uart_scenes(CORE, 2, True)
+        out = sim(tmp_path, {
+            "lane.v": ml.lane_source, "ml.v": ml.source,
+            "top.v": emit_mlane_uart(CORE, 2, True),
+            "tb.v": emit_mlane_uart_testbench(CORE, 2, True, sc)})
+        assert f"PASS: {len(sc)} scenes over the UART" in out, out[-2000:]

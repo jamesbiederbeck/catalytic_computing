@@ -403,6 +403,14 @@ MLANE_STATUS: dict[str, str] = {
                  "scalar simulator, outputs against the oracle; an interrupt "
                  "on one lane while the other runs). See "
                  "`docs/cmtz-multilane.md` of this repo for the measurements.",
+    "cmtz-lease": "Checked on the board with `examples/fpga/mlane_run.py` "
+                  "(1733 of 1733 checks: the independent-lane checks of "
+                  "cmtz-dual, the lease scenes of the testbench including "
+                  "every refusal code, a poisoned lease and its recovery, and "
+                  "40 random leases of a gate or a gate tree into the other "
+                  "lane's live registers while it runs; the owner's registers "
+                  "came back every time and its stalls matched the model to "
+                  "the cycle). See `docs/cmtz-multilane.md` of this repo.",
 }
 
 

@@ -206,3 +206,76 @@ is not the bottleneck.
 | `cmtz-dual` (2 lanes) | 5030 | 1132 | 4 | 4 | 104.0 |
 
 The board clock is 27 MHz, so every build has timing slack.
+
+### A2: static register leases in hardware
+
+`emit_mlane(..., lease=True)` turns each lane into `emit_core(...,
+lane=True)`: the same datapath, with the field registers moved out into
+one physical array `RF[32 l + r]`, a registered write port, and a `stall`
+input that holds EXEC. Per borrower lane, the lease is state (none, active
+or poisoned), owner, bank (1..3) and count (1..8). The borrower's window
+R24..R24+count−1 *is* the owner's R(8·bank)..: the same flip-flops.
+
+- The owner stalls when its instruction names a register held by an active
+  or poisoned lease. The operand-use decode comes from `encoding.FORMATS`.
+- `K` acquires a lease, with both lanes idle. It refuses (`FE`) a value
+  outside F_17, and (`FF`) a lane that would lend and borrow, a bank
+  already taken, or a second lease.
+- A borrower that halts releases the lease in the cycle its status changes,
+  so the owner runs again one cycle after the borrower's HALT, as in the
+  model. A borrower that errors poisons the lease. `K b o 0 0` cancels an
+  unused lease or clears a poisoned one; the host restores the values.
+- Host writes to leased registers are refused.
+
+The hardware leases whole banks, and the model leases arbitrary register
+sets. `hw_lease_code` states the hardware rule. The testbench generator
+asserts that the model accepts every lease the hardware accepts.
+
+- **Mathematics or proof.** Not in this phase: restoration is observed
+  bit for bit, not proven. A3 adds the proof.
+- **Simulator** (`test_multicore.py`): the borrower works in place.
+  Sampled mid-run, the owner's own physical registers hold the borrower's
+  intermediate values (at least 6 distinct states over one `gate_clean`).
+  The borrower's accesses go to the owner's register indices, never to its
+  own R24..R26, and the values are back at the end.
+- **RTL** (iverilog, `test_isa_mlane.py`), on 2 and on 4 lanes:
+  - 14 scenes on 2 lanes and 15 on 4 (two leases at once): a gate in the
+    owner's live registers while the owner runs and then stalls (369 cycles,
+    as predicted); a gate tree in the other lane's bank 1 while that lane
+    loops and then stalls (39 742 cycles); an owner write that stalls; every
+    refusal code; a poisoned lease, then cleared and restored; a cancelled
+    lease.
+  - Every lane's full state, cycle count and stall count match the model.
+  - Expecting one stall cycle more makes the testbench print FAIL.
+  - The UART testbench passes the same scenes through `K`/`E`, plus a host
+    write to a leased register (refused) and a cancel.
+- **Board** (`cmtz-lease`, `mlane_run.py`): 1733 of 1733 checks.
+  - The A1 checks all pass on this build too.
+  - The lease scenes pass.
+  - 40 random leases of `gate_clean` (3 registers) or `tree_clean` (5
+    registers) into the other lane's bank 1 or 2, with random live values,
+    while that lane runs a loop of random length and then reads a leased
+    register. The owner's registers came back in 40 of 40, and the outputs
+    equal the oracle.
+  - Owner stalls ranged from 0 cycles (the owner reached the register
+    after the borrower finished) to 39 425 cycles (it waited through a
+    whole tree), each equal to the model's prediction.
+
+**Cost.** Leases are expensive in logic:
+
+| Build | LUT4 | DFF | BSRAM | Fmax (MHz) |
+|---|---|---|---|---|
+| `cmtz-dual` | 5030 | 1132 | 4 | 104.0 |
+| `cmtz-lease` | 8822 | 1592 | 4 | 68.6 |
+
+- That is +3792 LUT4 (+75 %) and +460 DFF.
+- Fmax falls by a third, still well above the 27 MHz board clock.
+- In `cmtz-core` the register file maps to distributed RAM (98 RAM16SDP4 per
+  core). Shared across lanes, with a window mux in front of three read ports
+  per lane, it becomes 320 flip-flops behind wide multiplexers.
+- The register bits did not change: 2 × 32 × 5 in both builds.
+- The lease metadata is 2 × (2 + 1 + 2 + 4) = 18 flip-flops, plus the
+  per-lane cycle stamps.
+
+So in hardware, borrowing saves no storage at this register-file size. It
+*costs* logic. Any storage claim has to come from A5.

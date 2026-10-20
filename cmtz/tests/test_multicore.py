@@ -169,6 +169,27 @@ class TestStaticLeases:
             if r_ not in (7, 8, 16):
                 assert ref[r_] == m.R[r_], r_
 
+    def test_borrower_works_in_place(self):
+        """Mid-run the owner's physical registers hold the borrower's
+        intermediate values (no copy exists); at the end they are back."""
+        mc = MultiCore(CORE, 2, policy="static", snapshot=True,
+                       trace_access=True)
+        for r, v in zip((16, 17, 18), (3, 9, 12)):
+            mc.write_reg(0, r, v)
+        mc.submit(W.static_gate("g", 0, (16, 17, 18), 6, 1, 1, 0, lane=1))
+        seen = set()
+        for stop in range(20, 614, 40):
+            mc.run(stop_at=stop)
+            seen.add(tuple(mc.regs(0)[16:19]))
+        mc.run()
+        assert len(seen) > 5                    # changed in place, often
+        assert mc.regs(0)[16:19] == [3, 9, 12]
+        touched = {i for e in mc.trace if e["ev"] == "access"
+                   and e["lane"] == 1 for i in e["phys"]}
+        assert {16, 17, 18} <= touched          # lane 0's own flip-flops
+        assert not touched & {32 + 24, 32 + 25, 32 + 26}
+        assert not check_trace(mc.trace)
+
     def test_owner_runs_and_stalls_on_leased_register(self):
         """The owner loops on R1..R3 while lane 1 borrows R16..R18, then
         reads R16..R18 and stalls until the borrower is done."""
