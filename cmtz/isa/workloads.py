@@ -29,14 +29,21 @@ class Leased:
     image: ProgramImage
     catalytic: dict[str, int]       # name -> window register
     private: PR.Demo                # the program it came from
+    claim: object = None            # lease_proof.Claim: y gains the gate
 
 
 def leased(demo: PR.Demo) -> Leased:
-    """`demo` with its catalytic registers moved to R24, R25, ..."""
+    """`demo` with its catalytic registers moved to R24, R25, ..., and the
+    claim a lease checker proves before lending it registers: each output
+    gains ĝ (or the tree's f̂(ĝ1, ĝ2)), nothing else changes."""
+    from ..analysis.lease_proof import Claim
     cat = demo.layout.catalytic
     mapping = {r: WINDOW + i for i, r in enumerate(cat.values())}
     img = relocate(demo.image, mapping, drop_inputs=tuple(cat))
-    return Leased(img, {k: mapping[r] for k, r in cat.items()}, demo)
+    gain = PR.expected_gain(img.inputs)
+    claim = Claim.of({img.outputs[k]: gain for k in demo.layout.outputs},
+                     demo.layout.temps)
+    return Leased(img, {k: mapping[r] for k, r in cat.items()}, demo, claim)
 
 
 # owner: x, c in R1, R2; live values h0..h2 in R16..R18, untouched until the
@@ -82,7 +89,8 @@ def gate_job(name: str, tt: int, a: int, b: int, y: int, rng: random.Random,
            **{k: rng.randrange(P) for k in ("t1", "t2", "s")}}
     vs = []
     if forms in ("leased", "both"):
-        vs.append(Variant(lg.image, "leased", window=len(lg.catalytic)))
+        vs.append(Variant(lg.image, "leased", window=len(lg.catalytic),
+                          claim=lg.claim))
     if forms in ("private", "both"):
         vs.append(Variant(PR.gate_clean().image, "private"))
     return Job(name, vs, ins, lane=lane, arrival=arrival,
@@ -96,7 +104,8 @@ def tree_job(name: str, f: int, g1: int, g2: int, bits: tuple, y: int,
            **{k: rng.randrange(P) for k in ("t1", "t2", "tl", "tr", "s")}}
     vs = []
     if forms in ("leased", "both"):
-        vs.append(Variant(lt.image, "leased", window=len(lt.catalytic)))
+        vs.append(Variant(lt.image, "leased", window=len(lt.catalytic),
+                          claim=lt.claim))
     if forms in ("private", "both"):
         vs.append(Variant(PR.tree_clean().image, "private"))
     want = gate_tree(f, g1, g2, *bits, {k: ins[k] for k in
@@ -107,7 +116,8 @@ def tree_job(name: str, f: int, g1: int, g2: int, bits: tuple, y: int,
 def static_gate(name: str, owner: int, regs: tuple[int, ...], tt: int, a: int,
                 b: int, y: int, lane: int) -> Job:
     lg = leased(PR.gate_clean())
-    return Job(name, [Variant(lg.image, "leased", lease=Lease(owner, regs))],
+    return Job(name, [Variant(lg.image, "leased", lease=Lease(owner, regs),
+                              claim=lg.claim)],
                {**PR.gate_inputs(tt, a, b), "y": y}, lane=lane,
                expect={"y": (y + gate(tt, a, b)) % P})
 

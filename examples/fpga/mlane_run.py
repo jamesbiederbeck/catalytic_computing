@@ -51,6 +51,8 @@ from cmtz.isa import workloads as W
 from cmtz.isa.lease import Lease
 from cmtz.isa.mlane_host import MLaneLink
 from cmtz.isa.multicore import _Active
+from cmtz.isa.lease import relocate
+from cmtz.analysis.lease_proof import Checker, LeaseRefused, check_lease
 from cmtz.projection_oracle import gate, gate_tree
 
 CORE = CoreConfig(17, 19)
@@ -338,6 +340,22 @@ def leases(b: Board, rng: random.Random, quick: bool) -> None:
         b.scene(sc)
     print(f"{'standard lease scenes':28s}", "OK" if not b.fails else "failures")
     lg, lt = W.leased(PR.gate_clean()), W.leased(PR.tree_clean())
+    # the host asks for a lease only with a proof of the program it will run
+    # (analysis/lease_proof.py); the standard scenes above include programs
+    # without one on purpose, to drive the hardware's poison path
+    chk = Checker()
+    certs = {lg.image.crc: chk.certificate(lg.image, 3, lg.claim),
+             lt.image.crc: chk.certificate(lt.image, 5, lt.claim)}
+    bad = relocate(PR.gate_clean().image, {7: 24, 8: 25, 16: 26},
+                   drop_inputs=("t1", "t2", "s"))
+    bad = replace(bad, words=[w if i else w & ~0x7FF | 15      # LIX X3, 15
+                              for i, w in enumerate(bad.words)])
+    try:
+        chk.certificate(bad, 3, lg.claim)
+        b.check("host refuses an unproven lease", False, "the mutant certified")
+    except LeaseRefused as e:
+        b.check("host refuses an unproven lease",
+                any("catalytic" in v for v in e.violations))
     stalls, restored = [], 0
     count = 6 if quick else 40
     for i in range(count):
@@ -365,6 +383,9 @@ def leases(b: Board, rng: random.Random, quick: bool) -> None:
         oimg = ProgramImage(P, CORE.q, a.words, a.entry, a.handler,
                             inputs={"x": 1, "c": 2}, outputs={"r": 5})
         orun = LaneRun(owner, oimg, {"x": rng.randrange(P), "c": rng.randrange(P)})
+        cert = certs[run.image.crc]
+        b.check(f"lease {i}: certificate binds", not check_lease(
+            cert, run.image, Lease.banked(owner, bank, nreg), borrower, oimg))
         # the masks now come from the owner's registers; the gain of y does
         # not depend on them, so the oracle's y still holds
         out = b.scene(Scene(f"lease {i}: {'tree' if tree else 'gate'} "
@@ -379,7 +400,8 @@ def leases(b: Board, rng: random.Random, quick: bool) -> None:
         restored += ok
         stalls.append(out["lanes"][owner]["stalls"])
     b.log.append({"section": "leases", "random": count, "restored": restored,
-                  "owner_stalls": stalls})
+                  "owner_stalls": stalls,
+                  "certificates": {hex(k): v.key for k, v in certs.items()}})
     print(f"{'random leases':28s} {count} runs, owner registers restored in "
           f"{restored}; owner stalls {min(stalls)}..{max(stalls)} cycles")
 

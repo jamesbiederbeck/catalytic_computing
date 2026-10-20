@@ -382,9 +382,20 @@ def prove(demo: Demo):
     """Run the clean-computation proof (`analysis/isa_clean.py`) on `demo`:
     the output gains ĝ (or f̂(ĝ1, ĝ2)) as a polynomial in the input and
     coefficient registers, for every value in F_17 of every register."""
-    from ..analysis.isa_clean import Poly, verify_clean
+    from ..analysis.isa_clean import verify_clean
 
-    p, ins = CORE.p, demo.layout.inputs
+    lay = demo.layout
+    return verify_clean(demo.image, list(lay.catalytic.values()),
+                        {r: expected_gain(lay.inputs) for r in lay.outputs.values()},
+                        lay.temps)
+
+
+def expected_gain(ins: dict[str, int]):
+    """ĝ(a, b), or f̂(ĝ1(a, b), ĝ2(c, d)) for a tree, as a polynomial in the
+    registers `ins` names (the input map of the program's image)."""
+    from ..analysis.isa_clean import Poly
+
+    p = CORE.p
 
     def ext(ks, u: Poly, v: Poly) -> Poly:
         k0, k1, k2, k3 = (Poly.var(p, ins[k]) for k in ks)
@@ -393,13 +404,9 @@ def prove(demo: Demo):
     var = lambda name: Poly.var(p, ins[name])
     if "g1_k0" in ins:
         kk = lambda g: tuple(f"{g}_k{i}" for i in range(4))
-        gain = ext(kk("f"), ext(kk("g1"), var("a"), var("b")),
+        return ext(kk("f"), ext(kk("g1"), var("a"), var("b")),
                    ext(kk("g2"), var("c"), var("d")))
-    else:
-        gain = ext(("k0", "k1", "k2", "k3"), var("a"), var("b"))
-    lay = demo.layout
-    return verify_clean(demo.image, list(lay.catalytic.values()),
-                        {r: gain for r in lay.outputs.values()}, lay.temps)
+    return ext(("k0", "k1", "k2", "k3"), var("a"), var("b"))
 
 
 BENCH = [gate_direct, gate_projection, gate_clean, tree_direct, tree_clean]

@@ -94,7 +94,8 @@ class Variant:
     kind: str = "private"
     lease: Optional[Lease] = None
     window: int = 0
-    certificate: object = None                # analysis/lease_proof.py
+    claim: object = None            # what it promises (lease_proof.Claim)
+    certificate: object = None      # set when a checker proved the claim
 
     @property
     def borrows(self) -> int:
@@ -223,7 +224,8 @@ class MultiCore:
                  dispatch_cycles: int = 0, snapshot: bool = False,
                  trace_access: bool = False,
                  replay: Optional[list[dict]] = None,
-                 accept: Optional[Callable[[Variant, Lease], list[str]]] = None):
+                 accept: Optional[Callable[["MultiCore", int, Variant, Lease],
+                                           list[str]]] = None):
         self.core = core
         self.n = lanes
         cfgs = configs or [LaneConfig() for _ in range(lanes)]
@@ -247,7 +249,7 @@ class MultiCore:
         self._replay = list(replay) if replay is not None else None
         self.policy: Policy = (POLICIES[policy] if isinstance(policy, str)
                                else policy)
-        self.accept = accept      # lease acceptance check (A3), or None
+        self.accept = accept      # lease acceptance (lease_proof.Checker)
         self._releases: list[tuple[int, int, bool]] = []  # (t, lane, clean)
         self._dispatch_at: set[int] = set()
         self.stats = {"acquire": 0, "release": 0, "refuse": 0, "poison": 0,
@@ -352,7 +354,8 @@ class MultiCore:
                 errs.append(f"R{r} of lane {o} has a lane waiting for it")
         return errs
 
-    def acquire(self, borrower: int, lease: Lease, t: int) -> list[str]:
+    def acquire(self, borrower: int, lease: Lease, t: int,
+                cert: Optional[str] = None) -> list[str]:
         errs = self.lease_problems(borrower, lease)
         if not errs:
             phys = tuple(lease.owner * NUM_R + r for r in lease.regs)
@@ -373,6 +376,8 @@ class MultiCore:
                                           len(self.holder))
         ev = {"owner": lease.owner, "regs": list(lease.regs),
               "phys": list(phys)}
+        if cert:
+            ev["cert"] = cert
         if self.snapshot:
             ev["values"] = vals
         self._ev(t, "acquire", borrower, **ev)
@@ -509,13 +514,14 @@ class MultiCore:
         acceptance checks. Used by the policies."""
         errs = window_conflicts(v.image, len(lease.regs))
         if not errs and self.accept is not None:
-            errs = self.accept(v, lease)
+            errs = self.accept(self, lane, v, lease)
         if errs:
             self.stats["refuse"] += 1
             self._ev(t, "refuse", lane, owner=lease.owner,
                      regs=list(lease.regs), why=errs)
             return False
-        return not self.acquire(lane, lease, t)
+        cert = getattr(v.certificate, "key", None) if self.accept else None
+        return not self.acquire(lane, lease, t, cert)
 
     # ── execution ────────────────────────────────────────────────────
 

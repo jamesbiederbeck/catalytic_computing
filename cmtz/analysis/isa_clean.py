@@ -247,16 +247,19 @@ class CleanReport:
 
 
 def verify_clean(image: ProgramImage, catalytic: list[int],
-                 gains: dict[int, Poly], temps: list[int]) -> CleanReport:
+                 gains: dict[int, Poly], temps: list[int],
+                 supplied: tuple[int, ...] = ()) -> CleanReport:
     """Prove that `image` adds `gains[r]` to each output register r, brings
     every catalytic register back, and changes nothing else except `temps`
     (and index registers), for every entry value in [0, p).
 
     Also checks that every entry value a field operation sees is in a
-    host-written register (`image.inputs`): anything else is a leftover from
-    an earlier program and may lie in [p, q), where the hardware's
-    arithmetic is not arithmetic mod p (the proof would not apply even when
-    the value cancels out). Raises CleanProofError listing every violation.
+    host-written register (`image.inputs`) or in `supplied` (registers a
+    lease provides, range-checked at acquisition): anything else is a
+    leftover from an earlier program and may lie in [p, q), where the
+    hardware's arithmetic is not arithmetic mod p (the proof would not
+    apply even when the value cancels out). Raises CleanProofError listing
+    every violation.
     """
     p = image.p
     run = run_symbolic(image)
@@ -278,7 +281,7 @@ def verify_clean(image: ProgramImage, catalytic: list[int],
         else:
             unchanged.append(r)
     used = set(run.reads) | set(catalytic)
-    host = set(image.inputs.values())
+    host = set(image.inputs.values()) | set(supplied)
     for r in sorted(used - host):
         errs.append(f"reads the entry value of R{r}, which the host does "
                     "not write: a leftover from an earlier program")

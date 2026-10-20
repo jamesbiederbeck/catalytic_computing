@@ -279,3 +279,80 @@ asserts that the model accepts every lease the hardware accepts.
 
 So in hardware, borrowing saves no storage at this register-file size. It
 *costs* logic. Any storage claim has to come from A5.
+
+### A3: proof-aware leases
+
+`cmtz/analysis/lease_proof.py`. A borrowed computation carries a *claim*:
+the polynomial each output gains, and the private registers it may leave
+changed. The checker never trusts it. `certify(image, window, claim)` runs
+the clean-computation proof (`isa_clean.verify_clean`, polynomial symbolic
+execution over F_17 with x^17 = x) on the borrower's machine code as
+allocated. The window registers R24..R24+n−1 are the catalytic set whose
+entry values the lease supplies (`verify_clean(..., supplied=...)`; nothing
+else may be read unless the host writes it). The resulting `Certificate`
+records:
+
+- the program's crc32;
+- the window size and the catalytic registers;
+- the proven output gains and the permitted temporaries;
+- the initial-value domain (`requires_canonical`, which always includes the
+  window);
+- the exact retired and cycle counts, which bound how long the owner can
+  be stalled;
+- the handler status.
+
+`check_lease` binds a certificate to an actual lease:
+
+- the same program (crc) and the same register count;
+- owner ≠ borrower, so the window cannot alias the borrower's own
+  registers;
+- distinct registers;
+- an owner whose interrupt handler names none of them.
+
+The physical mapping is a renaming of logical R24..: distinct registers of
+another lane, written by nobody else while the lease is held (exclusive
+lease plus owner stall). The proof therefore carries over to every mapping
+that passes these checks. `Checker` plugs into `MultiCore(accept=...)`,
+proves each (program, window, claim) once, and records the certificate key
+in the trace's `acquire` event.
+
+Refused, each with a test (`test_lease_proof.py`, 19 tests):
+
+| Case | Why |
+|---|---|
+| 15 rotations instead of 16 | a borrowed register ends as ω^15·τ |
+| uncompute removed | masks come back, but y gains ĝ at 8a: wrong gain |
+| rotation by −1 (order 2) | the τ1·τ2 term survives |
+| wrong claimed gain; undeclared scratch register | output or scratch effect not as claimed |
+| touches R27 with a 3-register window; host input into the window; window too small | ownership |
+| a program that links matpow | the library owns R24..R31 |
+| `LD`, `ST`, `BZ` on a window register | unsupported memory or data-dependent control: fail closed |
+| reads R13, which neither host nor lease supplies | leftover, possibly in [p, q) |
+| handler names a window register | interrupt effect on borrowed state |
+| certificate for another program; wrong register count; owner = borrower; owner's handler names a leased register | binding |
+| a variant without a claim | no lease on a program's word |
+
+Accepted, also tested: rotation by ω² (order 8) or by 4 (order 4). Over
+16 steps any root of order greater than 2 cancels the degree-2 cross terms.
+A handler that passes `verify_handler` and stays off the window is accepted
+too.
+
+- **Mathematics or proof.** Restoration and the output gain are proven for
+  every value in [0, p) of every register, on the exact machine code the
+  lane runs.
+- **Simulator.** In seeded dynamic runs with the checker, every acquire
+  carries a certificate key, every job's output equals the oracle, and no
+  lease comes back changed. A non-restoring variant is refused and the job
+  runs on its private variant instead.
+- **RTL.** No new hardware: acceptance is the host's or the scheduler's
+  job. The range check it relies on is in the RTL (A2).
+- **Board** (`cmtz-lease`, `mlane_run.py --only leases`): 626 of 626 checks.
+  The host certified the leased `gate_clean` and `tree_clean` before
+  sending `K`, bound each of 40 random leases to its certificate, and
+  refused a 15-rotation mutant before sending anything. The standard lease
+  scenes deliberately run uncertified programs, to drive the hardware's
+  poison path.
+
+A debug snapshot (`MultiCore(snapshot=True)`) compares leased values at
+release. Its storage (`Report.snapshot_bits`) is reported separately and
+never counted as workspace.
