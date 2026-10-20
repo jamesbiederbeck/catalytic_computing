@@ -1,0 +1,739 @@
+{
+ "07_phasor_interference.cmtz": {
+  "cases": [
+   {
+    "lanes": [
+     6,
+     3,
+     6,
+     3
+    ],
+    "reply": [
+     1,
+     2,
+     2
+    ],
+    "state": [
+     6,
+     3,
+     6,
+     3,
+     5,
+     6,
+     6,
+     4,
+     1,
+     2,
+     2
+    ],
+    "values": {
+     "A_bar": [
+      6,
+      4
+     ],
+     "cembed_1": [
+      6,
+      3
+     ],
+     "cembed_2": [
+      6,
+      3
+     ],
+     "combined": 1,
+     "power": 1,
+     "power_A": 2,
+     "power_B": 2,
+     "solo_A": 2,
+     "solo_B": 2,
+     "sum_AB": [
+      5,
+      6
+     ]
+    }
+   },
+   {
+    "lanes": [
+     0,
+     0,
+     0,
+     0
+    ],
+    "reply": [
+     0,
+     0,
+     0
+    ],
+    "state": [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    "values": {
+     "A_bar": [
+      0,
+      0
+     ],
+     "cembed_1": [
+      0,
+      0
+     ],
+     "cembed_2": [
+      0,
+      0
+     ],
+     "combined": 0,
+     "power": 0,
+     "power_A": 0,
+     "power_B": 0,
+     "solo_A": 0,
+     "solo_B": 0,
+     "sum_AB": [
+      0,
+      0
+     ]
+    }
+   },
+   {
+    "lanes": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "reply": [
+     6,
+     3,
+     3
+    ],
+    "state": [
+     1,
+     2,
+     3,
+     4,
+     4,
+     6,
+     1,
+     5,
+     6,
+     3,
+     3
+    ],
+    "values": {
+     "A_bar": [
+      1,
+      5
+     ],
+     "cembed_1": [
+      1,
+      2
+     ],
+     "cembed_2": [
+      3,
+      4
+     ],
+     "combined": 6,
+     "power": 6,
+     "power_A": 3,
+     "power_B": 3,
+     "solo_A": 3,
+     "solo_B": 3,
+     "sum_AB": [
+      4,
+      6
+     ]
+    }
+   }
+  ],
+  "info_bytes": [
+   67,
+   77,
+   84,
+   90,
+   1,
+   4,
+   3,
+   11,
+   7,
+   2,
+   106,
+   28,
+   177,
+   170
+  ],
+  "manifest": {
+   "c": 3,
+   "complex": true,
+   "hash": 1780265386,
+   "hash_hex": "6a1cb1aa",
+   "lanes": {
+    "inputs": [
+     {
+      "lane": "re",
+      "node": "cembed_1",
+      "port": "in_cembed_1"
+     },
+     {
+      "lane": "im",
+      "node": "cembed_1",
+      "port": "in_cembed_1"
+     },
+     {
+      "lane": "re",
+      "node": "cembed_2",
+      "port": "in_cembed_2"
+     },
+     {
+      "lane": "im",
+      "node": "cembed_2",
+      "port": "in_cembed_2"
+     }
+    ],
+    "outputs": [
+     {
+      "lane": "",
+      "node": "combined",
+      "port": "out_combined"
+     },
+     {
+      "lane": "",
+      "node": "solo_A",
+      "port": "out_solo_A"
+     },
+     {
+      "lane": "",
+      "node": "solo_B",
+      "port": "out_solo_B"
+     }
+    ],
+    "state": [
+     {
+      "lane": "re",
+      "node": "cembed_1"
+     },
+     {
+      "lane": "im",
+      "node": "cembed_1"
+     },
+     {
+      "lane": "re",
+      "node": "cembed_2"
+     },
+     {
+      "lane": "im",
+      "node": "cembed_2"
+     },
+     {
+      "lane": "re",
+      "node": "sum_AB"
+     },
+     {
+      "lane": "im",
+      "node": "sum_AB"
+     },
+     {
+      "lane": "re",
+      "node": "A_bar"
+     },
+     {
+      "lane": "im",
+      "node": "A_bar"
+     },
+     {
+      "lane": "",
+      "node": "power"
+     },
+     {
+      "lane": "",
+      "node": "power_A"
+     },
+     {
+      "lane": "",
+      "node": "power_B"
+     }
+    ]
+   },
+   "latency": 2,
+   "nodes": [
+    {
+     "complex": true,
+     "const": null,
+     "depth": 0,
+     "kind": "input",
+     "name": "cembed_1",
+     "op": "IRComplexEmbed",
+     "width": 6
+    },
+    {
+     "complex": true,
+     "const": null,
+     "depth": 0,
+     "kind": "input",
+     "name": "cembed_2",
+     "op": "IRComplexEmbed",
+     "width": 6
+    },
+    {
+     "complex": true,
+     "const": null,
+     "depth": 1,
+     "kind": "reg",
+     "name": "sum_AB",
+     "op": "IRAdd",
+     "width": 6
+    },
+    {
+     "complex": true,
+     "const": null,
+     "depth": 1,
+     "kind": "reg",
+     "name": "A_bar",
+     "op": "IRConjugate",
+     "width": 6
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 2,
+     "kind": "reg",
+     "name": "power",
+     "op": "IRMagnitudeSq",
+     "width": 3
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 1,
+     "kind": "reg",
+     "name": "power_A",
+     "op": "IRMagnitudeSq",
+     "width": 3
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 1,
+     "kind": "reg",
+     "name": "power_B",
+     "op": "IRMagnitudeSq",
+     "width": 3
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 2,
+     "kind": "alias",
+     "name": "combined",
+     "op": "IRMeasure",
+     "width": 3
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 1,
+     "kind": "alias",
+     "name": "solo_A",
+     "op": "IRMeasure",
+     "width": 3
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 1,
+     "kind": "alias",
+     "name": "solo_B",
+     "op": "IRMeasure",
+     "width": 3
+    }
+   ],
+   "ok": true,
+   "p": 7,
+   "q": 53,
+   "reply_bytes": 3,
+   "request_bytes": 4,
+   "state_bytes": 11
+  }
+ },
+ "fibonacci_pure.cmtz": {
+  "cases": [
+   {
+    "lanes": [
+     1,
+     1
+    ],
+    "reply": [
+     8
+    ],
+    "state": [
+     1,
+     1,
+     2,
+     3,
+     5,
+     8,
+     13,
+     4,
+     0,
+     4,
+     4,
+     8
+    ],
+    "values": {
+     "F10": 4,
+     "F11": 4,
+     "F12": 8,
+     "F3": 2,
+     "F4": 3,
+     "F5": 5,
+     "F6": 8,
+     "F7": 13,
+     "F8": 4,
+     "F9": 0,
+     "embed_0": 1,
+     "embed_1": 1,
+     "result": 8
+    }
+   },
+   {
+    "lanes": [
+     16,
+     16
+    ],
+    "reply": [
+     9
+    ],
+    "state": [
+     16,
+     16,
+     15,
+     14,
+     12,
+     9,
+     4,
+     13,
+     0,
+     13,
+     13,
+     9
+    ],
+    "values": {
+     "F10": 13,
+     "F11": 13,
+     "F12": 9,
+     "F3": 15,
+     "F4": 14,
+     "F5": 12,
+     "F6": 9,
+     "F7": 4,
+     "F8": 13,
+     "F9": 0,
+     "embed_0": 16,
+     "embed_1": 16,
+     "result": 9
+    }
+   },
+   {
+    "lanes": [
+     3,
+     5
+    ],
+    "reply": [
+     15
+    ],
+    "state": [
+     3,
+     5,
+     8,
+     13,
+     4,
+     0,
+     4,
+     4,
+     8,
+     12,
+     3,
+     15
+    ],
+    "values": {
+     "F10": 12,
+     "F11": 3,
+     "F12": 15,
+     "F3": 8,
+     "F4": 13,
+     "F5": 4,
+     "F6": 0,
+     "F7": 4,
+     "F8": 4,
+     "F9": 8,
+     "embed_0": 3,
+     "embed_1": 5,
+     "result": 15
+    }
+   },
+   {
+    "lanes": [
+     0,
+     9
+    ],
+    "reply": [
+     2
+    ],
+    "state": [
+     0,
+     9,
+     9,
+     1,
+     10,
+     11,
+     4,
+     15,
+     2,
+     0,
+     2,
+     2
+    ],
+    "values": {
+     "F10": 0,
+     "F11": 2,
+     "F12": 2,
+     "F3": 9,
+     "F4": 1,
+     "F5": 10,
+     "F6": 11,
+     "F7": 4,
+     "F8": 15,
+     "F9": 2,
+     "embed_0": 0,
+     "embed_1": 9,
+     "result": 2
+    }
+   }
+  ],
+  "info_bytes": [
+   67,
+   77,
+   84,
+   90,
+   1,
+   2,
+   1,
+   12,
+   17,
+   10,
+   149,
+   151,
+   170,
+   113
+  ],
+  "manifest": {
+   "c": null,
+   "complex": false,
+   "hash": 2509744753,
+   "hash_hex": "9597aa71",
+   "lanes": {
+    "inputs": [
+     {
+      "lane": "",
+      "node": "embed_0",
+      "port": "in_embed_0"
+     },
+     {
+      "lane": "",
+      "node": "embed_1",
+      "port": "in_embed_1"
+     }
+    ],
+    "outputs": [
+     {
+      "lane": "",
+      "node": "result",
+      "port": "out_result"
+     }
+    ],
+    "state": [
+     {
+      "lane": "",
+      "node": "embed_0"
+     },
+     {
+      "lane": "",
+      "node": "embed_1"
+     },
+     {
+      "lane": "",
+      "node": "F3"
+     },
+     {
+      "lane": "",
+      "node": "F4"
+     },
+     {
+      "lane": "",
+      "node": "F5"
+     },
+     {
+      "lane": "",
+      "node": "F6"
+     },
+     {
+      "lane": "",
+      "node": "F7"
+     },
+     {
+      "lane": "",
+      "node": "F8"
+     },
+     {
+      "lane": "",
+      "node": "F9"
+     },
+     {
+      "lane": "",
+      "node": "F10"
+     },
+     {
+      "lane": "",
+      "node": "F11"
+     },
+     {
+      "lane": "",
+      "node": "F12"
+     }
+    ]
+   },
+   "latency": 10,
+   "nodes": [
+    {
+     "complex": false,
+     "const": null,
+     "depth": 0,
+     "kind": "input",
+     "name": "embed_0",
+     "op": "IREmbed",
+     "width": 5
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 0,
+     "kind": "input",
+     "name": "embed_1",
+     "op": "IREmbed",
+     "width": 5
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 1,
+     "kind": "reg",
+     "name": "F3",
+     "op": "IRAdd",
+     "width": 5
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 2,
+     "kind": "reg",
+     "name": "F4",
+     "op": "IRAdd",
+     "width": 5
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 3,
+     "kind": "reg",
+     "name": "F5",
+     "op": "IRAdd",
+     "width": 5
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 4,
+     "kind": "reg",
+     "name": "F6",
+     "op": "IRAdd",
+     "width": 5
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 5,
+     "kind": "reg",
+     "name": "F7",
+     "op": "IRAdd",
+     "width": 5
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 6,
+     "kind": "reg",
+     "name": "F8",
+     "op": "IRAdd",
+     "width": 5
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 7,
+     "kind": "reg",
+     "name": "F9",
+     "op": "IRAdd",
+     "width": 5
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 8,
+     "kind": "reg",
+     "name": "F10",
+     "op": "IRAdd",
+     "width": 5
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 9,
+     "kind": "reg",
+     "name": "F11",
+     "op": "IRAdd",
+     "width": 5
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 10,
+     "kind": "reg",
+     "name": "F12",
+     "op": "IRAdd",
+     "width": 5
+    },
+    {
+     "complex": false,
+     "const": null,
+     "depth": 10,
+     "kind": "alias",
+     "name": "result",
+     "op": "IRMeasure",
+     "width": 5
+    }
+   ],
+   "ok": true,
+   "p": 17,
+   "q": 19,
+   "reply_bytes": 1,
+   "request_bytes": 2,
+   "state_bytes": 12
+  }
+ }
+}

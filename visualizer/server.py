@@ -16,6 +16,7 @@ import argparse
 import json
 import socket
 import sys
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -29,8 +30,35 @@ from cmtz.ir_nodes import (
     IRRegion, IRCatalyticRegion, IRCycloPhiPoly, IRPoly,
 )
 from cmtz.backends.python_ref import PythonBackend
+from cmtz.hwview import HardwareView
 
 HERE = Path(__file__).parent
+
+STATIC_TYPES = {".js": "text/javascript; charset=utf-8",
+                ".css": "text/css; charset=utf-8"}
+
+# source text -> HardwareView (or the error string), so /api/hw/eval does not
+# recompile on every request from the board panel
+_HW_CACHE: "OrderedDict[str, HardwareView | str]" = OrderedDict()
+
+
+def hardware_for(source: str) -> "HardwareView | str":
+    """HardwareView for `source`, or a message saying why there is none."""
+    if source in _HW_CACHE:
+        _HW_CACHE.move_to_end(source)
+        return _HW_CACHE[source]
+    result = compile_program(source, backend="python", optimize=True)
+    if not result.ok:
+        view: "HardwareView | str" = "; ".join(result.errors)
+    else:
+        try:
+            view = HardwareView(result.ir_program)
+        except ValueError as e:
+            view = str(e)
+    _HW_CACHE[source] = view
+    while len(_HW_CACHE) > 8:
+        _HW_CACHE.popitem(last=False)
+    return view
 
 
 # ── Phase-shifted backend ─────────────────────────────────────────────────────
@@ -173,6 +201,10 @@ def compile_to_graph(source: str) -> dict:
 
     frames, m = compute_frames(prog, prog.ir_field)
 
+    view = hardware_for(source)
+    hw = view.manifest() if isinstance(view, HardwareView) \
+        else {"ok": False, "error": view}
+
     return {
         "ok":           True,
         "errors":       [],
@@ -181,6 +213,7 @@ def compile_to_graph(source: str) -> dict:
         "optimization": result.optimization_stats,
         "frames":       frames,
         "m":            m,
+        "hw":           hw,
     }
 
 
@@ -221,6 +254,11 @@ class Handler(BaseHTTPRequestHandler):
             examples_dir = HERE.parent / "examples"
             files = sorted(f.name for f in examples_dir.glob("*.cmtz"))
             self.send_json({"examples": files})
+        elif Path(self.path).parent == Path("/") and \
+                Path(self.path).suffix in STATIC_TYPES and \
+                (HERE / Path(self.path).name).is_file():
+            self.send_file(HERE / Path(self.path).name,
+                           STATIC_TYPES[Path(self.path).suffix])
         elif self.path.startswith("/api/example/"):
             fname = self.path[len("/api/example/"):]
             fpath = HERE.parent / "examples" / fname
@@ -244,6 +282,20 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"ok": False, "errors": [str(e)], "nodes": [],
                                 "frames": [], "m": 0}, 500)
+        elif self.path == "/api/hw/eval":
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                payload = json.loads(self.rfile.read(length))
+                view = hardware_for(payload.get("source", ""))
+                if not isinstance(view, HardwareView):
+                    self.send_json({"ok": False, "error": view}, 422)
+                else:
+                    out = view.evaluate(payload.get("lanes", []))
+                    self.send_json({"ok": True, **out})
+            except (ValueError, TypeError) as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
         else:
             self.send_response(404)
             self.end_headers()
