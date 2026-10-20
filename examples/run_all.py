@@ -114,6 +114,12 @@ MANIFEST = [
         # but the important thing is that compilation succeeds with
         # all analysis passes, including Theorem 1.2 budget check.
     }),
+    ("13_belief_propagation.cmtz", {
+        # X1's belief = (evidence_X0 * phi01_k) * (evidence_X2 * phi21_k)
+        #             = (3 * 2) * (2 * 3) mod 7 = 6 * 6 mod 7 = 1
+        # See 13_belief_propagation_runner.py for the full derivation.
+        "result": 1,
+    }),
 ]
 
 

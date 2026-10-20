@@ -1,0 +1,39 @@
+-- 13_belief_propagation.cmtz
+--
+-- Real-valued discrete circular belief propagation: one Fourier bin,
+-- one full sweep over a 3-node chain X0 - X1 - X2.
+-- See 13_belief_propagation_runner.py for the full derivation.
+--
+-- X0 and X2 are leaf variables injecting local evidence at a single
+-- frequency bin k (F_p stands in for one Fourier coefficient). Each edge
+-- carries a fixed (compile-time) factor coefficient phi_k. Since F_p* is
+-- cyclic, any such coefficient equals omega^j for some j, so the
+-- factor-to-variable scaling step is expressed with rotate() (multiply by
+-- a compile-time root exponent) rather than a general polynomial.
+--
+-- X1's belief is the *product* of its two incoming messages — the
+-- variable-to-factor step of belief propagation. That product is between
+-- two registers computed at runtime, which is exactly the gap v4 could
+-- not express (IRRotate/IRPoly only multiply a register by a compile-time
+-- constant; IRAdd only adds). mul() — v5 — is what makes this line
+-- possible.
+
+field(7);
+roots(7) as omega7;                 -- (1, 3, 2, 6, 4, 5)
+
+embed(0, 1);                        -- X0 evidence at bin k: omega^1 = 3
+embed(1, 2);                        -- X2 evidence at bin k: omega^2 = 2
+
+-- factor(X0,X1) coefficient phi_k = 2 = omega^2 -> rotate by j=2
+-- msg_X0_to_X1 = 3 * 2 = 6
+rotate(embed_0, msg01, 2);
+
+-- factor(X1,X2) coefficient phi_k = 3 = omega^1 -> rotate by j=1
+-- msg_X2_to_X1 = 2 * 3 = 6
+rotate(embed_1, msg21, 1);
+
+-- Variable-to-factor step at X1: product of incoming messages.
+-- belief_X1 = 6 * 6 = 36 mod 7 = 1
+mul(rot_embed_0_msg01, rot_embed_1_msg21) as belief_X1;
+
+measure(belief_X1, mod_p) as result;
