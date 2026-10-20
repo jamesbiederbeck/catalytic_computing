@@ -12,7 +12,7 @@ Usage:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 from .lexer import tokenize
 from .parser import Parser
@@ -53,6 +53,7 @@ def compile_program(
     optimize: bool = True,
     check_budget: bool = True,
     device: str = 'cuda',
+    backend_options: Optional[dict] = None,
 ) -> CompilationResult:
     """Compile a Cook-Mertz DSL v2 source string.
 
@@ -62,6 +63,8 @@ def compile_program(
         optimize: run optimization passes
         check_budget: verify Theorem 1.2 bounds
         device: torch device ('cuda' or 'cpu')
+        backend_options: extra keyword arguments for the backend; 'isa'
+            takes `inputs` and `matrix_dims`
 
     Returns:
         CompilationResult with IR program and backend output
@@ -228,6 +231,18 @@ def compile_program(
                 'latency': bundle.latency,
                 'num_vectors': bundle.num_vectors,
                 'simulate_command': bundle.simulate_command(),
+            }
+
+        elif backend == 'isa':
+            from .backends.isa_backend import emit_isa
+            bundle = emit_isa(ir_prog, **(backend_options or {}))
+            result.backend_output = {
+                'image': bundle.image,
+                'asm': bundle.asm,
+                'inputs': bundle.inputs,
+                'outputs': bundle.outputs,
+                'matrices_in': bundle.matrices_in,
+                'words': len(bundle.image.words),
             }
 
         else:

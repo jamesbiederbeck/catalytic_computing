@@ -6,3 +6,4 @@ from .analog_descriptor import emit_analog, AnalogDescriptor
 from .glsl_backend import emit_glsl, GLSLShaderBundle
 from .wasm_backend import emit_wasm, WasmBundle
 from .verilog_backend import emit_verilog, VerilogBundle
+from .isa_backend import emit_isa, IsaBundle
