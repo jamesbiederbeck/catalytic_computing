@@ -251,5 +251,5 @@ def test_verifier_precondition_values_below_p():
     a = assemble(".entry main\n.handler isr\nmain: LDI R2, 18\nWAITI\nHALT\n"
                  "isr: ADD R2, R2, R0\nRETI")
     img = ProgramImage(17, 19, a.words, a.entry, a.handler, borrowed=[2])
-    with pytest.raises(IsaCatalyticError, match=r"outside \[0, p\)"):
+    with pytest.raises(IsaCatalyticError, match=r"may leave it in \[p, q\)"):
         verify_handler(img)

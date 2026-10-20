@@ -130,3 +130,32 @@ def sweep_expected(core: CoreConfig, op: str, k: int = 0) -> list[int]:
         "MULI": lambda a, b: a * k % p,
     }[op]
     return [f(a, b) for a in range(na) for b in range(nb)]
+
+
+def noncanonical_handler(outer: int = 6, inner: int = 5) -> ProgramImage:
+    """A handler the verifier accepted before it checked handler reads: it
+    subtracts and adds back R7, an affine identity on borrowed R2. Main
+    sets R7 = 18 (LDI allows immediates up to q - 1), and the core's SUB
+    computes 0 - 18 as 12 instead of 16 (rb + p - rc wraps), so with
+    x = 0 the handler leaves R2 = 13. `verify_handler` now rejects it."""
+    src = f"""
+        .entry main
+        .handler isr
+main:   LDI   R7, 18
+        LIX   X1, 0
+        LIX   X3, {outer}
+        LIX   X4, {inner}
+outer:  LIX   X2, 0
+inner:  ADDIX X2, X2, 1
+        BLTX  X2, X4, inner
+        ADDIX X1, X1, 1
+        BLTX  X1, X3, outer
+        HALT
+isr:    SUB   R2, R2, R7
+        ADD   R2, R2, R7
+        RETI
+"""
+    a = assemble(src)
+    return ProgramImage(17, 19, a.words, a.entry, a.handler,
+                        inputs={"x": 2}, outputs={"x": 2}, borrowed=[2],
+                        listing=[str(i) for i in a.instrs])

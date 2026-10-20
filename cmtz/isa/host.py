@@ -196,7 +196,18 @@ class CoreLink:
             matrices: dict[str, list[list[int]]] | None = None,
             trigger_after: float | None = None, load: bool = True) -> Status:
         """Load, write inputs and matrices, run to completion. With
-        `trigger_after` (seconds), send one interrupt that long after `G`."""
+        `trigger_after` (seconds), send one interrupt that long after `G`.
+
+        Inputs and matrix entries must be field values in [0, p), as in
+        `Machine.set_inputs`: the core's W and D accept anything below q,
+        and the catalytic proofs say nothing about values in [p, q). Use
+        `write_reg` directly to put such a value in a register on purpose."""
+        bad = [f"{k}={v}" for k, v in (inputs or {}).items()
+               if not 0 <= v < self.core.p]
+        bad += [k for k, m in (matrices or {}).items()
+                if any(not 0 <= v < self.core.p for row in m for v in row)]
+        if bad:
+            raise ValueError(f"values outside [0, p): {', '.join(bad)}")
         if load:
             self.load(image)
         for k, v in (inputs or {}).items():

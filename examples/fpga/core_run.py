@@ -12,7 +12,8 @@ matpow, an exhaustive sweep of every field instruction, an interrupt
 sent over the UART while a long loop runs (the handler borrows a register
 the loop is reading; the loop's result must not change), and the
 roots-of-unity projection programs checked against
-`cmtz/projection_oracle.py` as well (`projection()`).
+`cmtz/projection_oracle.py` as well (`projection()`). `soundness()`
+reproduces, on the chip, what register values outside F_p do.
 
 Reads and writes the serial port only; load the bitstream first
 (openFPGALoader -c ft2232 _build/default/hardware.fs). Exit status 0 only if
@@ -40,7 +41,9 @@ from cmtz.ir_nodes import IRMatPow
 from cmtz.isa import CoreConfig, Machine
 from cmtz.isa import sim as S
 from cmtz.isa import projection as PR
-from cmtz.isa.demos import alu_sweep, catalytic_loop, sweep_expected
+from cmtz.isa.demos import (
+    alu_sweep, catalytic_loop, noncanonical_handler, sweep_expected,
+)
 from cmtz.isa.host import CoreLink
 from cmtz.projection_oracle import gate, gate_tree
 
@@ -312,12 +315,49 @@ def projection(b: Board, rng: random.Random, quick: bool) -> None:
     print(f"{'projection':28}{' OK' if b.fails == fails else ' FAILED'}")
 
 
+def soundness(b: Board) -> None:
+    """Values outside F_p on the board. These are counterexamples to the
+    unguarded contract, not checks of a proof: each must show exactly what
+    the RTL simulation shows (`test_isa_catalytic.TestRtlCounterexamples`).
+    The verifier now rejects the handler, and the host refuses inputs in
+    [p, q); here they are written raw on purpose."""
+    fails = b.fails
+    img = noncanonical_handler(2000, 300)
+    st = b.link.run(img, {"x": 0})
+    b.check("noncanonical handler, no T: x stays 0",
+            b.link.outputs(img)["x"] == 0)
+    b.link.load(img)
+    st = b.link.run(img, {"x": 0}, trigger_after=0.010, load=False)
+    x = b.link.outputs(img)["x"]
+    b.check("noncanonical handler: T leaves x = 13, as the RTL predicts",
+            st.interrupts and x == 13, f"x = {x}")
+    print(f"{'handler reading R7 = 18':28} x = 0 came back as {x} "
+          f"(T at retired {st.disp_retired})")
+    demo = PR.gate_clean()
+    for t1, back in ((17, 0), (18, 1)):
+        vals = {**PR.gate_inputs(PR.GATES["AND"], 1, 1), "t1": 0, "t2": 5, "y": 3}
+        b.link.load(demo.image)
+        for k, v in vals.items():
+            b.link.write_reg(demo.image.inputs[k], v)
+        b.link.write_reg(PR.T1, t1)
+        b.link.go()
+        b.link.wait()
+        out = b.link.outputs(demo.image)
+        b.check(f"gate_clean, mask {t1}: comes back as {back}",
+                out == {"t1": back, "t2": 5, "y": 4}, f"{out}")
+        print(f"{'gate_clean mask t1 = ' + str(t1):28} came back as {out['t1']}, "
+              f"y = {out['y']}")
+    print(f"{'soundness counterexamples':28}"
+          f"{' as predicted' if b.fails == fails else ' NOT as predicted'}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port")
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--only", nargs="+", metavar="SECTION",
-                    choices=["examples", "sweeps", "interrupts", "projection"],
+                    choices=["examples", "sweeps", "interrupts", "projection",
+                             "soundness"],
                     help="run only these sections")
     args = ap.parse_args()
     path = args.port or (glob.glob("/dev/serial/by-id/*if01-port0") or [None])[0]
@@ -331,7 +371,8 @@ def main() -> int:
     print(f"cmtz-core F_{CORE.p} found on {path}")
     b = Board(link)
     rng = random.Random(1)
-    only = set(args.only or ["examples", "sweeps", "interrupts", "projection"])
+    only = set(args.only or ["examples", "sweeps", "interrupts", "projection",
+                             "soundness"])
     if "examples" in only:
         examples(b, rng, 3 if args.quick else 10)
     if "sweeps" in only:
@@ -340,6 +381,8 @@ def main() -> int:
         interrupts(b, args.quick)
     if "projection" in only:
         projection(b, rng, args.quick)
+    if "soundness" in only:
+        soundness(b)
     print(f"\n{b.checks - b.fails} of {b.checks} checks matched")
     return 0 if b.fails == 0 else 1
 
