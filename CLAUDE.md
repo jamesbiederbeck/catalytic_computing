@@ -98,7 +98,7 @@ The DSL compiles structure and verifies cost bounds. Actual matrix computation r
 
 ### Working field constraint
 
-`q` must be a prime ≥ `p`. The spec example uses `field(17, 289)` but `289 = 17²` is not prime — this is illustrative only. Use `field(17, 293)` (the next prime above `17²`) in real programs. `compute_working_field(p, degree, n)` in `field.py` computes the correct `q` per Corollary 3.4.2.
+`q` must be a prime ≥ `p` (`field(p)` alone means `q = p`). `compute_working_field(p, degree, n)` in `field.py` computes the smallest valid `q` per Corollary 3.4.2.
 
 ### DSL register naming gotcha
 

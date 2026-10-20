@@ -133,7 +133,7 @@ Opens a browser app that compiles `.cmtz` source and renders the IR DAG. Its **B
 
 ## Field constraint
 
-`q` must be a prime ≥ `p`. The spec uses `field(17, 289)` as an illustration, but 289 = 17² is not prime — use `field(17, 293)` (next prime above 17²) in real programs. `compute_working_field(p, degree, n)` in `field.py` computes the correct `q` per Corollary 3.4.2.
+`field(p, q)` declares the base field F_p and the working field F_q that polynomials are evaluated in. Both must be prime with `q ≥ p`; the elaborator rejects anything else, and `field(p)` alone uses `q = p`. `compute_working_field(p, degree, n)` in `field.py` returns the smallest `q` that Corollary 3.4.2 allows for a given polynomial degree.
 
 ## RFCs
 

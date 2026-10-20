@@ -24,10 +24,10 @@ class TestParser:
         return Parser(tokens).parse()
 
     def test_field_decl_two_args(self):
-        prog = self._parse("field(17, 289);")
+        prog = self._parse("field(17, 293);")
         assert prog.field_decl is not None
         assert prog.field_decl.p == 17
-        assert prog.field_decl.q == 289
+        assert prog.field_decl.q == 293
 
     def test_field_decl_one_arg(self):
         prog = self._parse("field(7);")
@@ -83,7 +83,7 @@ class TestParser:
 
     def test_full_v2_program(self):
         src = """
-        field(17, 289);
+        field(17, 293);
         roots(17) as omega17;
         embed(0, 0);
         embed(1, 4);

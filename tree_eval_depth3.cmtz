@@ -9,10 +9,10 @@
 --   [Spec §2.6] Catalytic registers restored after each inner computation
 --   [Spec §2.7] Lemma 2.1 cost: t(f∘g) = t_f × t_g
 --
--- Field: F_17, working field F_289 (= 17^2)
+-- Field: F_17, working field F_293
 -- Root order: m = p-1 = 16 (powers of 2 give clean quarter-turn phases)
 
-field(17, 293);  -- q=293 is the smallest prime ≥ 17^2=289
+field(17, 293);  -- q = 293, the smallest prime ≥ 17^2
 
 -- ω-table: {g^j mod 17 : j ∈ [16]}, g = primitive root mod 17
 -- This is the v2 fix: primitive roots in F_p, NOT cyclotomic poly Φ_n(x)
