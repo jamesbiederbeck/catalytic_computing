@@ -137,3 +137,20 @@ def test_multiplier_diagram(bp):
     svg = diagram.draw_datapath(b, "cmtz-mul", "F_17 datapath")
     _check_svg_rules(svg)
     assert "mul" in svg and "product" in svg and "req byte 1" in svg
+
+
+# ── cmtz-core ────────────────────────────────────────────────────────────────
+
+def test_core_project(bp, tmp_path):
+    d = bp.build_core(tmp_path)
+    assert d.name == "cmtz-core"
+    ini = (d / "apio.ini").read_text()
+    assert "top-module = cmtz_core_uart" in ini and "-noalu" in ini
+    for f in ("cmtz_core.v", "cmtz_core_tb.v", "cmtz_core_uart.v",
+              "cmtz_core_uart_tb.v", "pins.cst", "README.md"):
+        assert (d / f).exists(), f
+    readme = (d / "README.md").read_text()
+    if "cmtz-core" in bp.ON_BOARD:
+        assert "Checked on the board" in readme
+    else:
+        assert "Not loaded on the board." in readme

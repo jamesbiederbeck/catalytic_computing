@@ -37,6 +37,10 @@ UPDATE_GOLDEN=1 uv run pytest cmtz/tests/test_hwview.py   # regenerate visualize
 uv run python examples/fpga/build_projects.py <dir> [--debug] [slug ...]
 # Check a design that is loaded on the board (reads/writes the UART only)
 uv run python examples/fpga/uart_check.py 08_ntt_butterfly.cmtz --basic
+
+# cmtz-core (reusable processor): generate the project, then check it on the board
+uv run python examples/fpga/build_projects.py <dir> --core
+uv run python examples/fpga/core_run.py [--quick]
 ```
 
 The Verilog simulation tests need `iverilog`/`vvp` on `PATH` and skip without them. The `tang-nano-20k` playground repo's `env.sh` puts them there along with apio's yosys, nextpnr and openFPGALoader (`source` it first).
@@ -79,6 +83,7 @@ The compiler is a classic pipeline: DSL source → IR DAG → analysis → optim
    - `analog_descriptor.py` — emits a JSON `AnalogDescriptor` with phase offsets, GEMM pass count, register depth for hardware targeting
    - `glsl_backend.py` — emits a fully unrolled GLSL 4.50 compute shader (branch-free, integer mod arithmetic); SSBO for root table; `spirv_compile_command()` returns the glslangValidator invocation
    - `verilog_backend.py` — pipelined Verilog-2001 (one registered stage per runtime node, no FSM, no `%`) plus a self-checking testbench; `IRMatPow` is rejected. See **FPGA flow** below.
+   - `isa_backend.py` — `emit_isa` (or `backend='isa'` with `backend_options`): a `ProgramImage` for **cmtz-core**, the reusable processor. Real field only; `matpow` runs (needs `matrix_dims`); `interrupt {}` becomes the interrupt handler. See **cmtz-core** below.
 
 ### Key data structures
 
@@ -89,7 +94,7 @@ The compiler is a classic pipeline: DSL source → IR DAG → analysis → optim
 
 ### The `matpow` / matrix evaluation split
 
-The DSL compiles structure and verifies cost bounds. Actual matrix computation requires calling `PythonBackend.eval_matpow_matrix(node, matrix)` directly in Python — the DSL backend returns 0 for `IRMatPow` nodes. The matrix (`list[list[int]]`) is not expressible in the DSL; it's a runtime parameter. See `examples/fibonacci_runner.py` for the pattern.
+The DSL compiles structure and verifies cost bounds. Actual matrix computation requires calling `PythonBackend.eval_matpow_matrix(node, matrix)` directly in Python — the DSL backend returns 0 for `IRMatPow` nodes. The cmtz-core backend is the exception: it executes matpow, with the matrix written to data memory at run time (the node's scalar value is still 0). The matrix (`list[list[int]]`) is not expressible in the DSL; it's a runtime parameter. See `examples/fibonacci_runner.py` for the pattern.
 
 ### Working field constraint
 
@@ -110,6 +115,15 @@ The DSL compiles structure and verifies cost bounds. Actual matrix computation r
 - **Generated files** (`cmtz_*.v`, `*_tb.v`, `diagram.svg`, per-project READMEs) are not edited by hand; change the generator and rebuild. `examples/fpga/diagram.py` draws each project's `diagram.svg` from the hardware manifest: plain SVG (no `<style>`/classes/scripts/fonts/images, its own white background rect, `viewBox`/`width`/`height`, `<title>` and `aria-label`, label text on a white rect instead of a stroke halo) because GitHub's mobile app does not render Mermaid and draws SVGs as images that ignore dark mode; `test_fpga_projects.py` enforces those rules.
 
 **Default to `-noalu`.** Build FPGA projects with `yosys-extra-options = -noalu` in `apio.ini` unless the default ALU mapping is needed (a design that does not fit in LUTs) or has been verified on the board. On the Tang Nano 20K (yosys 0.63, nextpnr-himbaechel, apicula) two `magsq` projects returned wrong answers on the chip with the default mapping (67 and 92 of 96 vectors) while RTL and post-synthesis simulation passed; with `-noalu` every vector matched. The toolchain cause is not isolated, so passing simulation proves nothing here. `ALU_VERIFIED` in `build_projects.py` lists the projects measured correct without the flag; a new example stays on `-noalu` until `uart_check.py` has matched it on the board both ways, and `ON_BOARD` (which controls the READMEs' "checked on the board" claim) is only extended after a real run. Load to SRAM first (volatile), not flash.
+
+### cmtz-core
+
+A fixed processor per field (`cmtz/isa/`) instead of a circuit per program. `encoding.py` is the single ISA definition (assembler, simulator and RTL all read it); `sim.py` is the reference the RTL testbenches compare against; `host.py` documents the UART protocol and drives a board; `demos.py` holds hand-written programs (catalytic interrupt loop, exhaustive per-instruction sweeps); `lib/matrix.s` is the matpow runtime. `backends/isa_core.py` and `isa_uart.py` generate the core, its UART front end and both testbenches.
+
+- **Run contract:** `G` / `Machine.start()` resets control state only; R, X and data memory keep their contents between runs. Programs must not read what neither they nor the host wrote; tests run with `Machine.scramble()` to check that.
+- **Allocation:** the compiler uses R1..R23; R24..R31 and X4..X15 belong to the library. An interrupt handler's registers are disjoint from everything main uses.
+- **Catalytic verification on machine code:** `analysis/isa_catalytic.py` checks the allocated handler (straight-line, writes only scratch and borrowed registers, linear ops on borrowed ones, net affine map over all registers is the identity). It runs inside `emit_isa`. The name-based `catalytic_verify.py` says nothing about allocated code.
+- **Testbench guards:** the core testbench runs ~70 cases back to back on one core (state carried, as on the board); mutation tests in `test_isa_core.py` prove it can fail. Interrupt trigger points are retired-instruction counts (`irq_at`), matched in the testbench at instruction boundaries.
 
 ## Spec
 

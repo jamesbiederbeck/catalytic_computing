@@ -1,7 +1,12 @@
 """Generate a Tang Nano 20K project for every example that lowers to hardware.
 
 Usage: uv run python examples/fpga/build_projects.py <output-dir> [--debug] [slug ...]
+       uv run python examples/fpga/build_projects.py <output-dir> --core
   e.g. <playground>/projects/cmtz
+
+--core builds cmtz-core instead: the reusable processor (cmtz/isa/), one
+bitstream for every program over F_17, loaded over the UART (see
+examples/fpga/core_run.py). Always -noalu.
 
 --debug builds the state-readback variant (cmtz-<name>-debug): same datapath
 plus a dbg_state bus, and a UART front end with I / R / S commands for the
@@ -24,10 +29,16 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # for diagram.py
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))   # cmtz
 
 from cmtz.compiler import compile_program
 from cmtz.backends.verilog_backend import emit_verilog
 from cmtz.backends.verilog_uart import emit_uart_wrapper
+from cmtz.backends.isa_core import emit_core, emit_core_testbench, standard_cases
+from cmtz.backends.isa_uart import (
+    emit_core_uart, emit_core_uart_testbench, standard_uart_cases,
+)
+from cmtz.isa import CoreConfig
 from diagram import draw_datapath
 
 EXAMPLES = Path(__file__).resolve().parent.parent
@@ -70,6 +81,7 @@ ON_BOARD = {
     "cmtz-phasor-interference", "cmtz-ntt-butterfly", "cmtz-interrupt-handler",
     "cmtz-fermat-little", "cmtz-diffie-hellman", "cmtz-belief-propagation",
     "cmtz-fibonacci", "cmtz-fibonacci-debug", "cmtz-phasor-interference-debug",
+    "cmtz-core",        # core_run.py: 987 of 987 checks, -noalu
 }
 
 
@@ -258,10 +270,119 @@ def build(outdir: Path, debug: bool = False,
               f"{wrap.reply_bytes} byte reply, latency {bundle.latency}")
 
 
+CORE = CoreConfig(17, 19)
+
+
+def core_readme(core: CoreConfig, project: str) -> str:
+    status = ("Checked on the board with `examples/fpga/core_run.py` (987 of 987 checks)."
+              if project in ON_BOARD else "Not loaded on the board.")
+    return f"""# {project}
+
+A reusable Cook-Mertz processor for F_{core.p} (q = {core.q}). Unlike the other
+`cmtz-*` projects, where every program is its own circuit, this bitstream runs
+any program the Cook-Mertz compiler emits for this field, loaded over the UART
+in milliseconds: compiled `.cmtz` programs, `matpow` with the matrix written
+to data memory at run time, and hand-written assembly. Interrupt handlers
+(`interrupt {{ }}`) run on the live register file; the compiler proves on the
+allocated machine code that they restore the registers they borrow.
+
+The ISA, assembler, simulator and compiler backend are in `cmtz/isa/` and
+`cmtz/backends/isa_backend.py` of the Cook-Mertz repo; the design notes are
+in `docs/cmtz-processor.md` of this repo.
+
+| | |
+|---|---|
+| Program memory | {core.pmem_size} x 32-bit instructions |
+| Data memory | {core.dmem_size} x {core.rw} bits |
+| Registers | R0..R31 field ({core.rw} bits, R0 = 0), X0..X15 index (16 bits, X0 = 0) |
+| Return stack | 8 |
+| Interrupts | one handler, no nesting, triggered over the UART |
+
+## UART protocol
+
+115200 8N1. One command byte, then arguments (big endian); the full
+description is the docstring of `cmtz/isa/host.py`.
+
+| Byte | Meaning |
+|---|---|
+| `I` | 21-byte info frame: `CMTC`, ISA version, p, q, memory sizes, core hash, loaded program length and crc32 |
+| `P` | load a program: n, entry, handler (`FFFF` = none), n x 4 bytes; replies `00` + crc32 of the words |
+| `W` | write a field register |
+| `D` / `M` | write / read data memory |
+| `S` | read R0..R31 and X0..X15 (64 bytes) |
+| `G` | run; replies `00` at once |
+| `Q` | 16-byte status: state, error, retired instructions, interrupt count, last dispatch |
+| `T` | trigger the interrupt (works while running) |
+| `X` | abort a run |
+
+`0xFF` marks a refused command (every reply byte). A run resets the control
+state only; registers and data memory keep their contents between runs.
+
+LEDs (active low): 0 running, 1 halted, 2 error, 3 toggles per interrupt,
+4 program loaded, 5 last reply was an error.
+
+## Files
+
+| File | What |
+|---|---|
+| `cmtz_core.v` | The processor. Generated. |
+| `cmtz_core_uart.v` | Top module `cmtz_core_uart`: UART receiver, transmitter and the command state machine. Generated. |
+| `cmtz_core_tb.v` | Core testbench: every real-field example, matpow, interrupts, an exhaustive sweep of every field instruction and every error code, run back to back on one core and checked against the simulator. Generated. |
+| `cmtz_core_uart_tb.v` | Whole-design testbench over the UART pins, including an interrupt that lands mid-loop and the refusals. Generated. |
+| `pins.cst` | `clk` pin 4, `tx` pin 69, `rx` pin 70, LEDs pins 15 to 20 |
+| `apio.ini` | Board, top module, `-noalu` |
+
+Regenerate with `examples/fpga/build_projects.py <dir> --core` in the
+Cook-Mertz repo rather than editing the generated files.
+
+## Build flag
+
+`apio.ini` sets `yosys-extra-options = -noalu`, the default for every cmtz
+project until it has been checked on the board both ways (see
+`build_projects.py`).
+
+## Test
+
+```
+source ../../../env.sh
+apio test        # prints PASS for both testbenches
+```
+
+## Status
+
+Both testbenches pass in simulation and `apio build` succeeds. {status}
+"""
+
+
+def build_core(outdir: Path, core: CoreConfig = CORE) -> Path:
+    project = "cmtz-core"
+    d = outdir / project
+    d.mkdir(parents=True, exist_ok=True)
+    tb = emit_core_testbench(core, standard_cases(core, EXAMPLES))
+    wrap = emit_core_uart(core)
+    (d / "cmtz_core.v").write_text(emit_core(core))
+    (d / "cmtz_core_tb.v").write_text(tb.source)
+    (d / "cmtz_core_uart.v").write_text(wrap.source)
+    (d / "cmtz_core_uart_tb.v").write_text(
+        emit_core_uart_testbench(core, standard_uart_cases(core, EXAMPLES)))
+    (d / "apio.ini").write_text(
+        "[env:default]\nboard = sipeed-tang-nano-20k\n"
+        f"top-module = {wrap.top_name}\nyosys-extra-options = -noalu\n")
+    (d / "pins.cst").write_text(PINS)
+    if not (d / "README.md").exists():
+        (d / "README.md").write_text(core_readme(core, project))
+    print(f"{project}: {tb.cases} core cases")
+    return d
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("outdir", type=Path)
     ap.add_argument("--debug", action="store_true")
+    ap.add_argument("--core", action="store_true")
     ap.add_argument("slugs", nargs="*")
     args = ap.parse_intermixed_args()
-    build(args.outdir, args.debug, args.slugs)
+    if args.core:
+        build_core(args.outdir)
+    else:
+        build(args.outdir, args.debug, args.slugs)
