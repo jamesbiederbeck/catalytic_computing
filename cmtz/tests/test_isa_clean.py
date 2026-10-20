@@ -65,7 +65,8 @@ def _mutant(src_old, src_new, fn=PR.gate_clean):
     ("SUB   R7, R7, R1", "NOP", r"gains R3 \+ 8\*R1\*R4"),
     ("MULI  R7, R7, 3", "NOP", "output R9 gains"),        # no rotation
     ("LIX   X3, 16", "LIX   X3, 15", "output R9 gains"),  # 15 rotations
-    ("SUB   R9, R9, R10", "ADD   R9, R9, R10", "output R9 gains"),
+    ("MULI  R9, R9, 16       ; -acc", "NOP", "output R9 gains"),   # sign
+    ("        HALT", "        ADD   R16, R16, R1\n        HALT", "catalytic R16"),
     ("        HALT", "        MULI  R8, R8, 3\n        HALT", "catalytic R8"),
 ])
 def test_broken_programs_are_rejected(old, new, why):
@@ -85,18 +86,26 @@ def test_rotation_exponents_are_what_matter():
     assert any("R9 gains" in v and "R7" in v for v in e.value.violations)
 
 
-def test_undeclared_temporary_is_rejected():
+def test_alternating_scratch_sign_cancels():
+    """Without the last negation s alternates between σ and -σ, so the
+    accumulator picks up -2·(±σ)·v each round. (-1)^j = ω^(8j), and
+    Σ_j ω^(8j)·(b + ω^j τ2) = 0, so the result is still exact: the proof
+    accepts it, correctly."""
+    PR.prove(_mutant("MULI  R16, R16, 16         ; s = sigma", "NOP"))
+
+
+def test_undeclared_change_is_rejected():
     demo = PR.gate_clean()
     lay = demo.layout
-    with pytest.raises(CleanProofError, match="R10 is not declared"):
+    with pytest.raises(CleanProofError, match="R9 is not declared"):
         verify_clean(demo.image, list(lay.catalytic.values()), {}, [])
 
 
 def test_reading_a_leftover_is_rejected():
     """R25 is not host-written: even though it cancels, its value may be
     17 or 18 on the board."""
-    demo = _mutant("SUB   R9, R9, R10", "SUB   R9, R9, R10\n"
-                   "        ADD   R9, R9, R25\n        SUB   R9, R9, R25")
+    demo = _mutant("        HALT", "        ADD   R9, R9, R25\n"
+                   "        SUB   R9, R9, R25\n        HALT")
     with pytest.raises(CleanProofError, match="R25, which the host does not write"):
         PR.prove(demo)
 

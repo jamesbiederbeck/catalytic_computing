@@ -64,10 +64,12 @@ def test_gate_programs_match_oracle(fn):
     rng = random.Random(fn.__name__)
     for tt, a, b in itertools.product(range(16), BITS, BITS):
         for k in range(3):
-            t1, t2, y = (rng.randrange(P) for _ in range(3))
+            t1, t2, sv, y = (rng.randrange(P) for _ in range(4))
             vals = {**PR.gate_inputs(tt, a, b), "y": y}
             if "t1" in demo.image.inputs:
                 vals.update(t1=t1, t2=t2)
+            if "s" in demo.image.inputs:
+                vals.update(s=sv)
             before, after = _run(demo, vals, seed=tt * 16 + 4 * a + 2 * b + k)
             _check_clean(demo, before, after, {"y": gate(tt, a, b)})
             if fn is PR.gate_clean:
@@ -81,7 +83,8 @@ def test_gate_clean_exhaustive_over_masks():
     demo = PR.gate_sweep()
     for n, (tt, a, b) in enumerate(itertools.product(range(16), BITS, BITS)):
         y0 = n % P
-        m = run_image(CORE, demo.image, {**PR.gate_inputs(tt, a, b), "y0": y0},
+        m = run_image(CORE, demo.image,
+                      {**PR.gate_inputs(tt, a, b), "y0": y0, "s": (5 * n) % P},
                       scramble=n)
         assert m.status == HALTED
         assert m.D[:3 * P * P] == PR.sweep_expected(tt, a, b, y0), (tt, a, b)
@@ -94,7 +97,7 @@ def test_tree_programs_match_oracle():
                for _ in range(8)]
     for (f, g1, g2), (a, b, c, d) in itertools.product(
             triples, itertools.product(BITS, repeat=4)):
-        regs = {k: rng.randrange(P) for k in ("t1", "t2", "tl", "tr", "y")}
+        regs = {k: rng.randrange(P) for k in ("t1", "t2", "tl", "tr", "s", "y")}
         vals = PR.tree_inputs(f, g1, g2, a, b, c, d)
         want = gate(f, gate(g1, a, b), gate(g2, c, d))
         seed = rng.randrange(1 << 30)
@@ -120,8 +123,8 @@ def test_retired_counts_are_data_independent():
         assert len(seen) == 1, fn.__name__
         counts[fn.__name__] = seen.pop()
     assert counts == {"gate_direct": 7, "gate_projection": 212,
-                      "gate_clean": 227, "tree_direct": 17,
-                      "tree_clean": 14755}
+                      "gate_clean": 307, "tree_direct": 17,
+                      "tree_clean": 19955}
 
 
 class TestInterrupt:
@@ -139,7 +142,7 @@ class TestInterrupt:
         for tt in range(16):
             a, b = rng.randrange(2), rng.randrange(2)
             vals = {**PR.gate_inputs(tt, a, b),
-                    **{k: rng.randrange(P) for k in ("t1", "t2", "y")}}
+                    **{k: rng.randrange(P) for k in ("t1", "t2", "s", "y")}}
             ref = run_image(CORE, good.image, vals, irq_at=())
             assert ref.waiting is False and ref.status == HALTED
             for k in range(ref.retired):
@@ -172,7 +175,7 @@ def test_benchmark_numbers():
     assert got == {
         "gate_direct": (7, 7, 14, 0, 1, 8),
         "gate_projection": (17, 212, 424, 0, 4, 13),
-        "gate_clean": (17, 227, 454, 2, 1, 10),
+        "gate_clean": (22, 307, 614, 3, 0, 10),
         "tree_direct": (17, 17, 34, 0, 3, 20),
-        "tree_clean": (53, 14755, 29510, 4, 1, 22),
+        "tree_clean": (68, 19955, 39910, 5, 0, 22),
     }

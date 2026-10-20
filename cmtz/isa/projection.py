@@ -11,7 +11,9 @@ gate triples of the tree).
   gate_projection  y -= Σ_j ĝ(a + ω^j τ1, b + ω^j τ2) with the masks
                    read-only and the shifted arguments built in temporaries
   gate_clean       the same sum computed in place: the masks are added
-                   into, rotated and restored (catalytic registers)
+                   into, rotated and restored, and the product term goes
+                   through a third restored register instead of a
+                   temporary, so every register but y comes back
   gate_sweep       gate_clean for every pair of masks in F_17 inside one
                    run, results stored to data memory (exhaustive on the
                    board in one load per gate and input)
@@ -19,7 +21,9 @@ gate triples of the tree).
                    borrows a mask register in the middle of it
   tree_direct      y += f̂(ĝ1(a, b), ĝ2(c, d)), straight-line
   tree_clean       the same through two levels of projection; g1 and g2
-                   only ever exist added into the parent's mask registers
+                   only ever exist added into the parent's mask registers,
+                   and every register but y comes back (only the loop
+                   counters in X are overwritten)
 
 Every register a program reads is host-written (`ProgramImage.inputs`).
 `Layout` records what each register is for, so register counts in the
@@ -81,15 +85,35 @@ def _ext(dst: int, u: int, v: int, k: tuple[int, int, int, int]) -> str:
         ADD   R{dst}, R{dst}, R{k0}"""
 
 
+def _acc_sub(acc: int, u: int, v: int, k: tuple[int, int, int, int],
+             s: int) -> str:
+    """acc -= ĝ(u, v) with no free temporary: s holds an arbitrary value σ
+    and gets it back. The product k3·u·v goes through s (s = σ + k3·u, so
+    acc picks up σ·v + k3·u·v), and the σ·v is cancelled after s is
+    restored."""
+    k0, k1, k2, k3 = k
+    return f"""
+        MULI  R{acc}, R{acc}, {NEG}       ; -acc
+        ADD   R{acc}, R{acc}, R{k0}
+        MAC   R{acc}, R{k1}, R{u}
+        MAC   R{acc}, R{k2}, R{v}
+        MAC   R{s}, R{k3}, R{u}         ; s = sigma + k3 u
+        MAC   R{acc}, R{s}, R{v}         ; -acc + g(u, v) + sigma v
+        MULI  R{s}, R{s}, {NEG}
+        MAC   R{s}, R{k3}, R{u}
+        MULI  R{s}, R{s}, {NEG}         ; s = sigma
+        MULI  R{acc}, R{acc}, {NEG}
+        MAC   R{acc}, R{s}, R{v}         ; acc - g(u, v)"""
+
+
 def _clean_loop(label: str, x: int, z: int, k, acc: int, t1: int, t2: int,
-                tmp: int, cnt: int, lim: int) -> str:
+                s: int, cnt: int, lim: int) -> str:
     """acc += ĝ(x, z) by 16 rotations of the masks t1, t2 (needs X{lim} =
-    16). On exit t1, t2 hold what they held on entry."""
+    16). On exit t1, t2 and s hold what they held on entry."""
     return f"""
         LIX   X{cnt}, 0
 {label}: ADD   R{t1}, R{t1}, R{x}        ; t1 = x + w^j T1
-        ADD   R{t2}, R{t2}, R{z}{_ext(tmp, t1, t2, k)}
-        SUB   R{acc}, R{acc}, R{tmp}      ; acc -= g(t1, t2)
+        ADD   R{t2}, R{t2}, R{z}{_acc_sub(acc, t1, t2, k, s)}
         SUB   R{t1}, R{t1}, R{x}        ; uncompute
         SUB   R{t2}, R{t2}, R{z}
         MULI  R{t1}, R{t1}, {OMEGA}         ; rotate
@@ -110,8 +134,8 @@ def _image(src: str, layout: Layout, *, handler_regs=None) -> Demo:
     return Demo(img, layout, src)
 
 
-# one-gate register map: a b | k0..k3 | t1 t2 | y | temps from R10
-A, B, K, T1, T2, Y = 1, 2, (3, 4, 5, 6), 7, 8, 9
+# one-gate register map: a b | k0..k3 | t1 t2 | y | s | temps from R10
+A, B, K, T1, T2, Y, S = 1, 2, (3, 4, 5, 6), 7, 8, 9, 16
 _GATE_IN = {"a": A, "b": B, "k0": 3, "k1": 4, "k2": 5, "k3": 6}
 
 
@@ -159,21 +183,20 @@ loop:   MUL   R{u}, R{w}, R{T1}
 
 
 def gate_clean() -> Demo:
-    t = 10
     src = f"""
         .entry main
-main:   LIX   X3, {M}{_clean_loop("loop", A, B, K, Y, T1, T2, t, 1, 3)}
+main:   LIX   X3, {M}{_clean_loop("loop", A, B, K, Y, T1, T2, S, 1, 3)}
         HALT
 """
-    lay = Layout(_GATE_IN, catalytic={"t1": T1, "t2": T2}, outputs={"y": Y},
-                 temps=[t], index=[1, 3])
+    lay = Layout(_GATE_IN, catalytic={"t1": T1, "t2": T2, "s": S},
+                 outputs={"y": Y}, index=[1, 3])
     return _image(src, lay)
 
 
 def gate_sweep() -> Demo:
     """For T1, T2 over F_17 (T1 outer): y = y0, run gate_clean, store
     (y, t1, t2) at D[3i], D[3i+1], D[3i+2], i = 17·T1 + T2."""
-    t, y0, one = 10, 11, 12
+    y0, one = 11, 12
     src = f"""
         .entry main
 main:   LIX   X3, {M}
@@ -184,7 +207,7 @@ main:   LIX   X3, {M}
         LIX   X4, 0
 li:     LDI   R{T2}, 0
         LIX   X5, 0
-lk:     MOV   R{Y}, R{y0}{_clean_loop("loop", A, B, K, Y, T1, T2, t, 1, 3)}
+lk:     MOV   R{Y}, R{y0}{_clean_loop("loop", A, B, K, Y, T1, T2, S, 1, 3)}
         ST    R{Y}, [X7]
         ST    R{T1}, [X7+1]
         ST    R{T2}, [X7+2]
@@ -197,7 +220,8 @@ lk:     MOV   R{Y}, R{y0}{_clean_loop("loop", A, B, K, Y, T1, T2, t, 1, 3)}
         BLTX  X4, X6, li
         HALT
 """
-    lay = Layout({**_GATE_IN, "y0": y0}, temps=[t, one, T1, T2, Y],
+    lay = Layout({**_GATE_IN, "y0": y0}, catalytic={"s": S},
+                 temps=[one, T1, T2, Y],
                  index=[1, 3, 4, 5, 6, 7])
     return _image(src, lay)
 
@@ -219,7 +243,6 @@ def gate_irq(outer: int, inner: int, restore: bool = True) -> Demo:
     handler borrows mask t1 and uses it, then restores it (or not)."""
     if not (0 < outer < 2048 and 0 < inner < 2048):
         raise ValueError("loop counts must be in 1..2047")
-    t = 10
     src = f"""
         .entry main
         .handler isr
@@ -228,7 +251,7 @@ main:   LIX   X3, {M}
         LIX   X6, {outer}
         LIX   X7, {inner}
 ro:     LIX   X5, 0
-ri:     {_clean_loop("loop", A, B, K, Y, T1, T2, t, 1, 3).strip()}
+ri:     {_clean_loop("loop", A, B, K, Y, T1, T2, S, 1, 3).strip()}
         ADDIX X5, X5, 1
         BLTX  X5, X7, ri
         ADDIX X4, X4, 1
@@ -242,15 +265,15 @@ isr:    LDI   R{ISR_K}, 4
         {"SUB   R%d, R%d, R%d" % (T1, T1, ISR_K) if restore else "NOP"}
         RETI
 """
-    lay = Layout(_GATE_IN, catalytic={"t1": T1, "t2": T2}, outputs={"y": Y},
-                 temps=[t], index=[1, 3, 4, 5, 6, 7])
+    lay = Layout(_GATE_IN, catalytic={"t1": T1, "t2": T2, "s": S},
+                 outputs={"y": Y}, index=[1, 3, 4, 5, 6, 7])
     return _image(src, lay, handler_regs=([T1], [ISR_K, ISR_OUT]))
 
 
 # tree register map: a b c d | g1 k | g2 k | f k | t1 t2 tl tr | y | tmp
 TA, TB, TC, TD = 1, 2, 3, 4
 KG1, KG2, KF = (5, 6, 7, 8), (9, 10, 11, 12), (13, 14, 15, 16)
-TT1, TT2, TL, TR, TY, TTMP = 17, 18, 19, 20, 21, 22
+TT1, TT2, TL, TR, TY, TS = 17, 18, 19, 20, 21, 22
 
 
 def _tree_in() -> dict[str, int]:
@@ -285,15 +308,14 @@ def tree_clean() -> Demo:
     the masks t1, t2."""
     src = f"""
         .entry main
-g1:     {_clean_loop("g1l", TA, TB, KG1, TL, TT1, TT2, TTMP, 2, 3).strip()}
+g1:     {_clean_loop("g1l", TA, TB, KG1, TL, TT1, TT2, TS, 2, 3).strip()}
         RET
-g2:     {_clean_loop("g2l", TC, TD, KG2, TR, TT1, TT2, TTMP, 2, 3).strip()}
+g2:     {_clean_loop("g2l", TC, TD, KG2, TR, TT1, TT2, TS, 2, 3).strip()}
         RET
 main:   LIX   X3, {M}
         LIX   X1, 0
 pl:     CALL  g1                        ; tl = w^j TL + g1
-        CALL  g2                        ; tr = w^j TR + g2{_ext(TTMP, TL, TR, KF)}
-        SUB   R{TY}, R{TY}, R{TTMP}         ; y -= f(tl, tr)
+        CALL  g2                        ; tr = w^j TR + g2{_acc_sub(TY, TL, TR, KF, TS)}
         MULI  R{TL}, R{TL}, {NEG}
         CALL  g1
         MULI  R{TL}, R{TL}, {NEG}         ; tl -= g1
@@ -307,8 +329,8 @@ pl:     CALL  g1                        ; tl = w^j TL + g1
         HALT
 """
     lay = Layout(_tree_in(),
-                 catalytic={"t1": TT1, "t2": TT2, "tl": TL, "tr": TR},
-                 outputs={"y": TY}, temps=[TTMP], index=[1, 2, 3])
+                 catalytic={"t1": TT1, "t2": TT2, "tl": TL, "tr": TR, "s": TS},
+                 outputs={"y": TY}, index=[1, 2, 3])
     return _image(src, lay)
 
 
@@ -331,12 +353,12 @@ def rtl_cases(seed: int = 0) -> list:
         for tt in (GATES["AND"], GATES["XOR"], GATES["NAND"], rng.randrange(16)):
             a, b = rng.randrange(2), rng.randrange(2)
             vals = {**gate_inputs(tt, a, b), **masks("y")}
-            if "t1" in demo.image.inputs:
-                vals.update(masks("t1", "t2"))
+            vals.update({k: v for k, v in masks("t1", "t2", "s").items()
+                         if k in demo.image.inputs})
             cases.append(CoreCase(demo.image, f"{fn.__name__} {tt} {a}{b}",
                                   vals, check_cycles=True))
     cases.append(CoreCase(gate_sweep().image, "gate_sweep XOR 1 0",
-                          {**gate_inputs(GATES["XOR"], 1, 0), "y0": 7},
+                          {**gate_inputs(GATES["XOR"], 1, 0), "y0": 7, "s": 11},
                           check_cycles=True))
     for fn in (tree_direct, tree_clean):
         for _ in range(2):
@@ -344,13 +366,13 @@ def rtl_cases(seed: int = 0) -> list:
             ins = [rng.randrange(2) for _ in range(4)]
             vals = {**tree_inputs(*tts, *ins), **masks("y")}
             if fn is tree_clean:
-                vals.update(masks("t1", "t2", "tl", "tr"))
+                vals.update(masks("t1", "t2", "tl", "tr", "s"))
             cases.append(CoreCase(fn().image, f"{fn.__name__} {tts} {ins}",
                                   vals, check_cycles=True))
     for restore in (True, False):
         img = gate_irq(2, 1, restore).image
         for k in (0, 1, 50, 237, 400):
-            vals = {**gate_inputs(rng.randrange(16), 1, 1), **masks("t1", "t2", "y")}
+            vals = {**gate_inputs(rng.randrange(16), 1, 1), **masks("t1", "t2", "s", "y")}
             cases.append(CoreCase(img, f"gate_irq restore={restore} irq@{k}",
                                   vals, irq_at=(k,), check_cycles=True))
     return cases

@@ -238,7 +238,7 @@ def projection(b: Board, rng: random.Random, quick: bool) -> None:
         f0 = b.fails
         for tt, x, z in gates:
             vals = {**PR.gate_inputs(tt, x, z),
-                    **{k: rng.randrange(CORE.p) for k in ("t1", "t2", "y")}}
+                    **{k: rng.randrange(CORE.p) for k in ("t1", "t2", "s", "y")}}
             vals = {k: v for k, v in vals.items() if k in demo.image.inputs}
             st, m = b.run(demo.image, f"{fn.__name__} {tt} {x}{z}", vals)
             out = b.link.outputs(demo.image)
@@ -254,7 +254,8 @@ def projection(b: Board, rng: random.Random, quick: bool) -> None:
     for n, (tt, x, z) in enumerate(sweep):
         y0 = rng.randrange(CORE.p)
         st, m = b.run(demo.image, f"gate_sweep {tt} {x}{z}",
-                      {**PR.gate_inputs(tt, x, z), "y0": y0})
+                      {**PR.gate_inputs(tt, x, z), "y0": y0,
+                       "s": rng.randrange(CORE.p)})
         got = b.link.read_data(0, 3 * CORE.p * CORE.p)
         want = PR.sweep_expected(tt, x, z, y0)
         b.check(f"gate_sweep {tt} {x}{z}: oracle", got == want,
@@ -268,7 +269,7 @@ def projection(b: Board, rng: random.Random, quick: bool) -> None:
         for _ in range(n):
             tts = [rng.randrange(16) for _ in range(3)]
             ins = [rng.randrange(2) for _ in range(4)]
-            regs = {k: rng.randrange(CORE.p) for k in ("t1", "t2", "tl", "tr", "y")}
+            regs = {k: rng.randrange(CORE.p) for k in ("t1", "t2", "tl", "tr", "s", "y")}
             vals = {**PR.tree_inputs(*tts, *ins),
                     **{k: v for k, v in regs.items() if k in demo.image.inputs}}
             st, m = b.run(demo.image, f"{fn.__name__} {tts} {ins}", vals)
@@ -287,7 +288,7 @@ def projection(b: Board, rng: random.Random, quick: bool) -> None:
     f0 = b.fails
     for tt in (PR.GATES["AND"], PR.GATES["XOR"]):
         vals = {**PR.gate_inputs(tt, 1, 1),
-                **{k: rng.randrange(CORE.p) for k in ("t1", "t2", "y")}}
+                **{k: rng.randrange(CORE.p) for k in ("t1", "t2", "s", "y")}}
         st0, m0 = b.run(good.image, "gate_irq, no T", vals)
         b.check("gate_irq: y gains outer*inner*g",
                 m0.outputs()["y"] == (vals["y"] + outer * inner * gate(tt, 1, 1)) % CORE.p)
