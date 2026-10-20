@@ -133,3 +133,40 @@ class TestProjectionSimulation:
                               "cmtz_core_tb.v": tb.replace(
                                   f"chk_cycles({n});", f"chk_cycles({int(n) + 1});")})
         assert _verdict(out).startswith("FAIL")
+
+
+@pytest.mark.skipif(not IVERILOG, reason="iverilog/vvp not installed")
+class TestCycleModel:
+    """`Machine.cycles` against the RTL on the paths the projection
+    programs do not take: loads, a trigger with no handler, faults."""
+
+    def test_cycles_match(self, tmp_path):
+        from cmtz.backends.isa_backend import emit_isa
+        from cmtz.compiler import compile_program
+
+        r = compile_program((EXAMPLES / "fibonacci.cmtz").read_text(), backend="python")
+        fib = emit_isa(r.ir_program, CORE, matrix_dims={"fib_matrix": 2})
+
+        def asm(src, **kw):
+            a = assemble(src)
+            return ProgramImage(17, 19, a.words, a.entry, a.handler, **kw)
+
+        cases = [
+            CoreCase(fib.image, "fibonacci matpow (LD)",
+                     # no zeros: the testbench writes only words that differ from the
+                     # simulator's zero-filled memory, and RTL memory starts as x
+                     matrices={"fib_matrix": [[1, 1], [1, 2]]}, check_cycles=True),
+            CoreCase(asm("LIX X1, 0\nLD R1, [X1]\nLD R2, [X1+1]\nHALT"),
+                     "two loads", check_cycles=True),
+            CoreCase(asm("NOP\nNOP\nNOP\nNOP\nHALT"), "trigger, no handler",
+                     irq_at=(2,), check_cycles=True),
+            CoreCase(asm(f"LIX X1, {CORE.dmem_size}\nLD R1, [X1]\nHALT"),
+                     "LD address fault", check_cycles=True),
+            CoreCase(asm("NOP"), "pc fault", check_cycles=True),
+            CoreCase(asm("f: CALL f"), "stack overflow", check_cycles=True),
+        ]
+        tb = emit_core_testbench(CORE, cases)
+        assert tb.expected[0].cycles > 2 * tb.expected[0].retired   # has loads
+        out = _sim(tmp_path, {"cmtz_core.v": emit_core(CORE),
+                              "cmtz_core_tb.v": tb.source})
+        assert _verdict(out).startswith("PASS"), out[-2000:]

@@ -24,8 +24,9 @@ until some handler has returned since the run began; a run that stalls
 there with no trigger left to come returns with `waiting` set.
 
 Cycles: `cycles` follows the core's FSM (`backends/isa_core.py`): FETCH
-and EXEC for every instruction, one MEM cycle more for LD, one FETCH more
-for a dispatch, one cycle for a pc fault caught in FETCH. A WAITI stall
+and EXEC for every instruction (also one that faults in EXEC), one MEM
+cycle more for a load, one FETCH more for a taken trigger (even with no
+handler, when it is dropped), one cycle for a pc fault caught in FETCH. A WAITI stall
 lasts as long as the host takes to trigger, so a run that stalled has
 `cycles_exact` False.
 """
@@ -168,11 +169,11 @@ class Machine:
         self.waiting = False
         if self.pending and not self.in_handler:
             self.pending = False
+            self.cycles += 1        # the FETCH that takes the trigger
             if self.image.handler is not None:
                 self.saved_pc, self.pc = self.pc, self.image.handler
                 self.in_handler = True
                 self.dispatches.append((self.retired, self.saved_pc))
-                self.cycles += 1
         if not 0 <= self.pc < len(self.code):
             self.cycles += 1
             return self._fail(E_PC)
@@ -181,7 +182,7 @@ class Machine:
         R, X = self.R, self.X
         nxt = self.pc + 1
         op, a, b, c, imm = ins.op, ins.a, ins.b, ins.c, ins.imm
-        self.cycles += 3 if op == "LD" else 2
+        self.cycles += 2
 
         def rp(i: int) -> int:          # field operand, must be < p
             return self._check(R[i], p, f"R{i}")
@@ -236,6 +237,7 @@ class Machine:
                 return self._fail(E_ADDR)
             if op == "LD":
                 setr(a, self.D[addr])
+                self.cycles += 1    # MEM
             else:
                 self.D[addr] = R[a]
         elif op == "JMP":
