@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..projection_oracle import coeffs
+from ..projection_oracle import GATES, coeffs
 from .asm import assemble
 from .image import CoreConfig, ProgramImage
 
@@ -113,6 +113,10 @@ def _image(src: str, layout: Layout, *, handler_regs=None) -> Demo:
 # one-gate register map: a b | k0..k3 | t1 t2 | y | temps from R10
 A, B, K, T1, T2, Y = 1, 2, (3, 4, 5, 6), 7, 8, 9
 _GATE_IN = {"a": A, "b": B, "k0": 3, "k1": 4, "k2": 5, "k3": 6}
+
+
+def gate_name(tt: int) -> str:
+    return {v: k for k, v in GATES.items()}[tt]
 
 
 def gate_inputs(tt: int, a: int, b: int, prefix: str = "") -> dict[str, int]:
@@ -306,3 +310,47 @@ pl:     CALL  g1                        ; tl = w^j TL + g1
                  catalytic={"t1": TT1, "t2": TT2, "tl": TL, "tr": TR},
                  outputs={"y": TY}, temps=[TTMP], index=[1, 2, 3])
     return _image(src, lay)
+
+
+def rtl_cases(seed: int = 0) -> list:
+    """`CoreCase`s for the RTL testbench: every program, interrupts at
+    random boundaries, clock cycles checked against `Machine.cycles`."""
+    import random
+
+    from ..backends.isa_core import CoreCase
+
+    rng = random.Random(seed)
+    p = CORE.p
+
+    def masks(*names: str) -> dict[str, int]:
+        return {k: rng.randrange(p) for k in names}
+
+    cases = []
+    for fn in (gate_direct, gate_projection, gate_clean):
+        demo = fn()
+        for tt in (GATES["AND"], GATES["XOR"], GATES["NAND"], rng.randrange(16)):
+            a, b = rng.randrange(2), rng.randrange(2)
+            vals = {**gate_inputs(tt, a, b), **masks("y")}
+            if "t1" in demo.image.inputs:
+                vals.update(masks("t1", "t2"))
+            cases.append(CoreCase(demo.image, f"{fn.__name__} {tt} {a}{b}",
+                                  vals, check_cycles=True))
+    cases.append(CoreCase(gate_sweep().image, "gate_sweep XOR 1 0",
+                          {**gate_inputs(GATES["XOR"], 1, 0), "y0": 7},
+                          check_cycles=True))
+    for fn in (tree_direct, tree_clean):
+        for _ in range(2):
+            tts = [rng.randrange(16) for _ in range(3)]
+            ins = [rng.randrange(2) for _ in range(4)]
+            vals = {**tree_inputs(*tts, *ins), **masks("y")}
+            if fn is tree_clean:
+                vals.update(masks("t1", "t2", "tl", "tr"))
+            cases.append(CoreCase(fn().image, f"{fn.__name__} {tts} {ins}",
+                                  vals, check_cycles=True))
+    for restore in (True, False):
+        img = gate_irq(2, 1, restore).image
+        for k in (0, 1, 50, 237, 400):
+            vals = {**gate_inputs(rng.randrange(16), 1, 1), **masks("t1", "t2", "y")}
+            cases.append(CoreCase(img, f"gate_irq restore={restore} irq@{k}",
+                                  vals, irq_at=(k,), check_cycles=True))
+    return cases

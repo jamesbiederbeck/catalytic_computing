@@ -110,3 +110,26 @@ class TestUartSimulation:
             return src.replace(old, new)
         out = _sim(tmp_path, self._files(mutate))
         assert _verdict(out).startswith("FAIL")
+
+
+@pytest.mark.skipif(not IVERILOG, reason="iverilog/vvp not installed")
+class TestProjectionSimulation:
+    """The projection programs on the RTL, state and cycles checked against
+    the simulator (which the oracle tests already tie to the math)."""
+
+    def test_projection_cases_pass(self, tmp_path):
+        from cmtz.isa.projection import rtl_cases
+        tb = emit_core_testbench(CORE, rtl_cases())
+        out = _sim(tmp_path, {"cmtz_core.v": emit_core(CORE),
+                              "cmtz_core_tb.v": tb.source})
+        assert _verdict(out).startswith("PASS"), out[-2000:]
+
+    def test_wrong_cycle_count_fails(self, tmp_path):
+        from cmtz.isa.projection import rtl_cases
+        cases = rtl_cases()[:1]
+        tb = emit_core_testbench(CORE, cases).source
+        n = tb.split("chk_cycles(")[2].split(")")[0]
+        out = _sim(tmp_path, {"cmtz_core.v": emit_core(CORE),
+                              "cmtz_core_tb.v": tb.replace(
+                                  f"chk_cycles({n});", f"chk_cycles({int(n) + 1});")})
+        assert _verdict(out).startswith("FAIL")

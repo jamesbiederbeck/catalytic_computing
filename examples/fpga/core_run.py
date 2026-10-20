@@ -2,15 +2,17 @@
 reference backend.
 
 Usage: uv run python examples/fpga/core_run.py [--port /dev/serial/by-id/...-if01-port0]
-                                              [--quick]
+                                              [--quick] [--only SECTION ...]
 
 Before each run it reads the board's whole state (registers and data
 memory), seeds the simulator with it, runs the same program on both and
 compares the whole state afterwards, plus the program outputs against
 `evaluate_all` / `eval_matpow_matrix`. Covers every real-field F_17 example,
-matpow, an exhaustive sweep of every field instruction, and an interrupt
+matpow, an exhaustive sweep of every field instruction, an interrupt
 sent over the UART while a long loop runs (the handler borrows a register
-the loop is reading; the loop's result must not change).
+the loop is reading; the loop's result must not change), and the
+roots-of-unity projection programs checked against
+`cmtz/projection_oracle.py` as well (`projection()`).
 
 Reads and writes the serial port only; load the bitstream first
 (openFPGALoader -c ft2232 _build/default/hardware.fs). Exit status 0 only if
@@ -19,6 +21,7 @@ everything matched.
 
 import argparse
 import glob
+import itertools
 import random
 import sys
 import time
@@ -36,8 +39,10 @@ from cmtz.backends.verilog_backend import evaluate_all
 from cmtz.ir_nodes import IRMatPow
 from cmtz.isa import CoreConfig, Machine
 from cmtz.isa import sim as S
+from cmtz.isa import projection as PR
 from cmtz.isa.demos import alu_sweep, catalytic_loop, sweep_expected
 from cmtz.isa.host import CoreLink
+from cmtz.projection_oracle import gate, gate_tree
 
 EXAMPLES = Path(__file__).resolve().parent.parent
 CORE = CoreConfig(17, 19)
@@ -218,10 +223,102 @@ def interrupts(b: Board, quick: bool) -> None:
           f"{f' ({late} triggers too late to count)' if late else ''}")
 
 
+def projection(b: Board, rng: random.Random, quick: bool) -> None:
+    """Roots-of-unity projection programs (`cmtz/isa/projection.py`): the
+    board against the simulator (whole state) and the oracle."""
+    fails = b.fails
+    gates = list(itertools.product(range(16), (0, 1), (0, 1)))
+    if quick:
+        gates = [(tt, rng.randrange(2), rng.randrange(2)) for tt in range(16)]
+    for fn in (PR.gate_direct, PR.gate_projection, PR.gate_clean):
+        demo = fn()
+        f0 = b.fails
+        for tt, x, z in gates:
+            vals = {**PR.gate_inputs(tt, x, z),
+                    **{k: rng.randrange(CORE.p) for k in ("t1", "t2", "y")}}
+            vals = {k: v for k, v in vals.items() if k in demo.image.inputs}
+            st, m = b.run(demo.image, f"{fn.__name__} {tt} {x}{z}", vals)
+            out = b.link.outputs(demo.image)
+            want = {"y": (vals["y"] + gate(tt, x, z)) % CORE.p}
+            want.update({k: vals[k] for k in demo.layout.catalytic})
+            b.check(f"{fn.__name__} {tt} {x}{z}: oracle", out == want, f"{out}")
+        print(f"{fn.__name__:28} {len(gates)} gate/input runs, {m.retired} "
+              f"instructions, {m.cycles} cycles each"
+              f"{' OK' if b.fails == f0 else ' FAILED'}")
+
+    demo, f0 = PR.gate_sweep(), b.fails
+    sweep = gates[::4] if quick else gates
+    for n, (tt, x, z) in enumerate(sweep):
+        y0 = rng.randrange(CORE.p)
+        st, m = b.run(demo.image, f"gate_sweep {tt} {x}{z}",
+                      {**PR.gate_inputs(tt, x, z), "y0": y0})
+        got = b.link.read_data(0, 3 * CORE.p * CORE.p)
+        want = PR.sweep_expected(tt, x, z, y0)
+        b.check(f"gate_sweep {tt} {x}{z}: oracle", got == want,
+                f"{sum(g != w for g, w in zip(got, want))} words differ")
+    print(f"{'gate_sweep (all 289 masks)':28} {len(sweep)} gate/input runs"
+          f"{' OK' if b.fails == f0 else ' FAILED'}")
+
+    for fn in (PR.tree_direct, PR.tree_clean):
+        demo, f0 = fn(), b.fails
+        n = 4 if quick else 16
+        for _ in range(n):
+            tts = [rng.randrange(16) for _ in range(3)]
+            ins = [rng.randrange(2) for _ in range(4)]
+            regs = {k: rng.randrange(CORE.p) for k in ("t1", "t2", "tl", "tr", "y")}
+            vals = {**PR.tree_inputs(*tts, *ins),
+                    **{k: v for k, v in regs.items() if k in demo.image.inputs}}
+            st, m = b.run(demo.image, f"{fn.__name__} {tts} {ins}", vals)
+            out = b.link.outputs(demo.image)
+            want = {k: v for k, v in gate_tree(*tts, *ins, regs).items()
+                    if k in out}
+            b.check(f"{fn.__name__} {tts} {ins}: oracle", out == want, f"{out}")
+        print(f"{fn.__name__:28} {n} random trees, {m.retired} instructions, "
+              f"{m.cycles} cycles each{' OK' if b.fails == f0 else ' FAILED'}")
+
+    # a handler that borrows mask t1 while gate_clean uses it; as in
+    # interrupts(), main has to outlast the ~6 ms before T can arrive
+    outer, inner = (26, 200) if quick else (52, 200)
+    good = PR.gate_irq(outer, inner)
+    bad = PR.gate_irq(outer, inner, restore=False)
+    f0 = b.fails
+    for tt in (PR.GATES["AND"], PR.GATES["XOR"]):
+        vals = {**PR.gate_inputs(tt, 1, 1),
+                **{k: rng.randrange(CORE.p) for k in ("t1", "t2", "y")}}
+        st0, m0 = b.run(good.image, "gate_irq, no T", vals)
+        b.check("gate_irq: y gains outer*inner*g",
+                m0.outputs()["y"] == (vals["y"] + outer * inner * gate(tt, 1, 1)) % CORE.p)
+        landed = []
+        for delay in (0.0, 0.010, 0.030, 0.060):
+            b.link.load(good.image)
+            before = b.link.status().interrupts
+            st = b.link.run(good.image, vals, trigger_after=delay, load=False)
+            out = b.link.outputs(good.image)
+            if st.interrupts == before:
+                print(f"  note: trigger {delay * 1000:.0f} ms after G arrived after HALT")
+                continue
+            b.check("gate_irq: y and masks unchanged by the handler",
+                    out == m0.outputs(), f"{out} vs {m0.outputs()}")
+            b.check("gate_irq: retired = run + handler", st.retired == st0.retired + 7)
+            landed.append(st.disp_retired)
+        b.check("gate_irq: interrupts landed mid-run",
+                any(0 < k < st0.retired for k in landed), f"{landed}")
+        b.link.load(bad.image)
+        st = b.link.run(bad.image, vals, trigger_after=0.010, load=False)
+        out = b.link.outputs(bad.image)
+        print(f"{'gate_irq ' + PR.gate_name(tt):28} {st0.retired} instructions, T "
+              f"landed at {landed}; non-restoring handler at {st.disp_retired}: "
+              f"{'changed ' + str(out) if out != m0.outputs() else 'unchanged'}")
+    print(f"{'projection':28}{' OK' if b.fails == fails else ' FAILED'}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port")
     ap.add_argument("--quick", action="store_true")
+    ap.add_argument("--only", nargs="+", metavar="SECTION",
+                    choices=["examples", "sweeps", "interrupts", "projection"],
+                    help="run only these sections")
     args = ap.parse_args()
     path = args.port or (glob.glob("/dev/serial/by-id/*if01-port0") or [None])[0]
     if not path:
@@ -234,9 +331,15 @@ def main() -> int:
     print(f"cmtz-core F_{CORE.p} found on {path}")
     b = Board(link)
     rng = random.Random(1)
-    examples(b, rng, 3 if args.quick else 10)
-    sweeps(b)
-    interrupts(b, args.quick)
+    only = set(args.only or ["examples", "sweeps", "interrupts", "projection"])
+    if "examples" in only:
+        examples(b, rng, 3 if args.quick else 10)
+    if "sweeps" in only:
+        sweeps(b)
+    if "interrupts" in only:
+        interrupts(b, args.quick)
+    if "projection" in only:
+        projection(b, rng, args.quick)
     print(f"\n{b.checks - b.fails} of {b.checks} checks matched")
     return 0 if b.fails == 0 else 1
 

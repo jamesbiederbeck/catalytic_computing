@@ -22,6 +22,12 @@ returns. A trigger during the handler stays pending until after RETI.
 Without a handler, a trigger is dropped. WAITI stalls (without retiring)
 until some handler has returned since the run began; a run that stalls
 there with no trigger left to come returns with `waiting` set.
+
+Cycles: `cycles` follows the core's FSM (`backends/isa_core.py`): FETCH
+and EXEC for every instruction, one MEM cycle more for LD, one FETCH more
+for a dispatch, one cycle for a pc fault caught in FETCH. A WAITI stall
+lasts as long as the host takes to trigger, so a run that stalled has
+`cycles_exact` False.
 """
 
 from __future__ import annotations
@@ -60,6 +66,8 @@ class Machine:
     status: int = IDLE
     error: int = E_NONE
     retired: int = 0
+    cycles: int = 0
+    cycles_exact: bool = True
     in_handler: bool = False
     saved_pc: int = 0
     pending: bool = False
@@ -127,6 +135,7 @@ class Machine:
         self.pc, self.stack = self.image.entry, []
         self.pending = self.in_handler = self.handled = self.waiting = False
         self.status, self.error, self.retired = RUNNING, E_NONE, 0
+        self.cycles, self.cycles_exact = 0, True
         self.saved_pc, self.dispatches = 0, []
 
     def run(self, max_steps: int = 1_000_000,
@@ -163,13 +172,16 @@ class Machine:
                 self.saved_pc, self.pc = self.pc, self.image.handler
                 self.in_handler = True
                 self.dispatches.append((self.retired, self.saved_pc))
+                self.cycles += 1
         if not 0 <= self.pc < len(self.code):
+            self.cycles += 1
             return self._fail(E_PC)
         ins = self.code[self.pc]
         p, q = self.core.p, self.core.q
         R, X = self.R, self.X
         nxt = self.pc + 1
         op, a, b, c, imm = ins.op, ins.a, ins.b, ins.c, ins.imm
+        self.cycles += 3 if op == "LD" else 2
 
         def rp(i: int) -> int:          # field operand, must be < p
             return self._check(R[i], p, f"R{i}")
@@ -254,6 +266,7 @@ class Machine:
         elif op == "WAITI":
             if not self.handled:
                 self.waiting = True
+                self.cycles_exact = False
                 return              # stall: no retire, pc unchanged
         else:   # pragma: no cover - decode() rejects unknown opcodes
             return self._fail(E_OPCODE)
