@@ -28,7 +28,22 @@ so 0xFF is never a legal value and marks errors.
   other bytes are ignored. A command that stops partway for TIMEOUT_CLKS is
   dropped; bytes sent while a reply goes out are ignored.
 
-status: 0 idle, 1 running, 2 halted, 3 error. The run contract is the one in
+Step build only (`emit_core(step=True)`, `emit_core_uart(step=True)`); a core
+without it ignores 'H' and 'N', so a timeout on 'H' means "no step support":
+
+  'H'  pause. Reply 0x00 at once, or 0xFF (nothing loaded). A running core
+       stops at the next instruction boundary; an idle, halted or failed one
+       is loaded paused at the entry (what `Machine.start()` does, nothing
+       executed). Poll 'Q' for status 4. Asking a paused core again is fine.
+  'N'  one step of a paused core. Reply 0x00 at once, or 0xFF (not paused).
+       It is one `Machine.step()`: a pending interrupt is taken and the
+       first handler instruction runs in the same step; a WAITI that keeps
+       waiting is a step that retires nothing. The core is paused again (or
+       halted, or failed) when 'Q' next reports it.
+  'G'  on a paused core resumes it from where it stands: nothing is reset.
+  While paused, 'S', 'M', 'Q', 'T' and 'X' work; 'P', 'W' and 'D' are refused.
+
+status: 0 idle, 1 running, 2 halted, 3 error, 4 paused (step build). The run contract is the one in
 `sim.py`: 'G' resets the control state only; registers and data memory keep
 their contents.
 """
@@ -43,6 +58,7 @@ from .image import CoreConfig, ProgramImage
 
 INFO_LEN, STATUS_LEN, REGS_LEN = 21, 16, 64
 OK, BAD = 0x00, 0xFF
+PAUSED = 4                  # 'Q' status of a step build that is stopped
 
 
 def words_crc(words: list[int]) -> int:
@@ -181,6 +197,30 @@ class CoreLink:
 
     def trigger(self) -> None:
         self._xfer(b"T", 1)
+
+    # step build only; a core without it never answers 'H' or 'N' (TimeoutError)
+
+    def pause(self, timeout: float = 2.0) -> Status:
+        """Stop the core at an instruction boundary and return its status."""
+        if self._xfer(b"H", 1)[0] != OK:
+            raise RuntimeError("H refused (nothing loaded)")
+        t0 = time.monotonic()
+        while True:
+            s = self.status()
+            if s.status != 1 or time.monotonic() - t0 > timeout:
+                return s
+
+    def step(self) -> Status:
+        """One `Machine.step()` of a paused core; returns the new status."""
+        if self._xfer(b"N", 1)[0] != OK:
+            raise RuntimeError("N refused (core is not paused)")
+        while True:
+            s = self.status()
+            if s.status != 1:
+                return s
+
+    def resume(self) -> None:
+        self.go()
 
     def abort(self) -> None:
         self._xfer(b"X", 1)

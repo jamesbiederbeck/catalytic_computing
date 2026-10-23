@@ -10,7 +10,8 @@ from cmtz.backends.isa_core import (
     CoreCase, emit_core, emit_core_testbench, standard_cases,
 )
 from cmtz.backends.isa_uart import (
-    emit_core_uart, emit_core_uart_testbench, standard_uart_cases,
+    emit_core_step_testbench, emit_core_uart, emit_core_uart_testbench,
+    standard_step_cases, standard_uart_cases,
 )
 from cmtz.isa import CoreConfig, assemble
 from cmtz.isa.encoding import OPS
@@ -170,3 +171,68 @@ class TestCycleModel:
         out = _sim(tmp_path, {"cmtz_core.v": emit_core(CORE),
                               "cmtz_core_tb.v": tb.source})
         assert _verdict(out).startswith("PASS"), out[-2000:]
+
+
+class TestStepBuildIsOptIn:
+    """The debugger is a flag; without it the generated Verilog has none of it."""
+
+    def test_default_core_has_no_pause(self):
+        src = emit_core(CORE)
+        for word in ("S_PAUSE", "pause_req", "step_req", "resume_req", "paused"):
+            assert word not in src
+
+    def test_default_front_end_has_no_step_commands(self):
+        src = emit_core_uart(CORE).source
+        for word in ("pause_req", "step_req", "resume_req", "status_b", "blink"):
+            assert word not in src
+        assert '"H"' not in src and '"N"' not in src
+
+    def test_step_core_has_them(self):
+        assert "S_PAUSE" in emit_core(CORE, step=True)
+        assert '"H", "N"' in emit_core_uart(CORE, step=True).source
+
+    def test_lane_cannot_step(self):
+        with pytest.raises(ValueError):
+            emit_core(CORE, lane=True, step=True)
+
+
+@pytest.mark.skipif(not IVERILOG, reason="iverilog/vvp not installed")
+class TestStepBuildSimulation:
+    """cmtz-core with the debugger: every `N` is compared with Machine.step()."""
+
+    def _files(self, mutate_core=None, tb="step"):
+        core = emit_core(CORE, step=True)
+        files = {"cmtz_core.v": core if mutate_core is None else mutate_core(core),
+                 "cmtz_core_uart.v": emit_core_uart(CORE, step=True).source}
+        if tb == "step":
+            files["cmtz_core_step_tb.v"] = emit_core_step_testbench(
+                CORE, standard_step_cases(CORE, EXAMPLES))
+        else:
+            files["cmtz_core_uart_tb.v"] = emit_core_uart_testbench(
+                CORE, standard_uart_cases(CORE, EXAMPLES))
+        return files
+
+    def test_stepping_matches_the_simulator(self, tmp_path):
+        out = _sim(tmp_path, self._files())
+        assert _verdict(out).startswith("PASS"), out[-2000:]
+
+    def test_every_old_command_still_behaves(self, tmp_path):
+        # the unchanged UART testbench, on the step build
+        out = _sim(tmp_path, self._files(tb="uart"))
+        assert _verdict(out).startswith("PASS"), out[-2000:]
+
+    @pytest.mark.parametrize("old,new", [
+        # ordinary instructions never complete a step
+        ("state <= S_FETCH; step_done <= 1'b1;", "state <= S_FETCH;"),
+        # a pause asked for while running is dropped
+        ("pause_pend <= 1'b1;", "pause_pend <= 1'b0;"),
+        # resume restarts from the entry instead of continuing
+        ("stepping <= 1'b0; state <= S_FETCH;",
+         "stepping <= 1'b0; pc <= cfg_entry; state <= S_FETCH;"),
+    ])
+    def test_broken_step_core_fails(self, tmp_path, old, new):
+        def mutate(src):
+            assert old in src
+            return src.replace(old, new)
+        out = _sim(tmp_path, self._files(mutate))
+        assert _verdict(out).startswith("FAIL")

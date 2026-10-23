@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from cmtz.accel.mlkem_ntt import arith, rtlgen, tb_core, tb_uart, uart_top
+from cmtz.accel.mlkem_ntt import arith, gowin_sim, rtlgen, tb_core, tb_uart, uart_top
 from cmtz.accel.mlkem_ntt.config import NTTConfig
 
 IVERILOG = shutil.which("iverilog") and shutil.which("vvp")
@@ -54,6 +54,15 @@ class TestCoreSimulation:
         out = sim(tmp_path, {"b.v": arith.emit_butterfly("montgomery"), "c.v": core,
                              "t.v": tb_core.emit_core_tb(cfg)}, ["b.v", "c.v", "t.v"])
         assert "FAIL" in out and "PASS" not in out
+
+    @pytest.mark.parametrize("lanes", [1, 4])
+    def test_sdp_primitive_banks(self, lanes, tmp_path):
+        """Hand-instantiated SDPX9B banks (READ_MODE=1) behave like the inferred ones."""
+        cfg = NTTConfig(lanes=lanes, bank_prim="sdp")
+        out = sim(tmp_path, {"b.v": arith.emit_butterfly("montgomery"),
+                             "c.v": rtlgen.emit_core(cfg)[0], "m.v": gowin_sim.MODEL,
+                             "t.v": tb_core.emit_core_tb(cfg)}, ["m.v", "b.v", "c.v", "t.v"])
+        assert "PASS mlkem_ntt_core" in out, out[-800:]
 
     def test_fast_clock_variants(self, tmp_path):
         """xreg/wreg off: shorter pipeline, same results, cycle model still exact."""

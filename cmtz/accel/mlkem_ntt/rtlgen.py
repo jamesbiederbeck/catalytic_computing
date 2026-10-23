@@ -100,12 +100,43 @@ def emit_core(cfg: NTTConfig):
             return (f"    reg [AW-1:0] ra_b{k} = 0, wa_b{k} = 0;\n    reg we_b{k} = 1'b0;\n    reg [11:0] wd_b{k} = 0;\n"
                     f"    always @(posedge clk) begin ra_b{k} <= ra{k}; wa_b{k} <= wa{k}; we_b{k} <= we{k}; wd_b{k} <= wd{k}; end")
         return (f"    wire [AW-1:0] ra_b{k} = ra{k}, wa_b{k} = wa{k};\n    wire we_b{k} = we{k};\n    wire [11:0] wd_b{k} = wd{k};")
+    sdp = cfg.bank_prim == "sdp"
+    n_rd = cfg.rd_reg - (1 if sdp else 0)       # fabric read stages (the SDP output register is one)
+
     def rd_chain_decl(k):
-        return "\n".join(f"    reg [11:0] rd{k}_{i} = 0;      // read pipeline stage {i}" for i in range(1, cfg.rd_reg + 1))
+        return "\n".join(f"    reg [11:0] rd{k}_{i} = 0;      // read pipeline stage {i}" for i in range(1, n_rd + 1))
+
+    def rd_out(k):
+        return f"rd{k}_{n_rd}" if n_rd else f"rdm{k}"
+
+    def mem_decl(k):
+        if not sdp:
+            return (f"    {ram_attr}reg [11:0] mem{k} [0:{cfg.depth - 1}];\n"
+                    f"    reg [11:0] rdm{k} = 0;                // BSRAM read register")
+        return f"    wire [35:0] sdo{k};\n    wire [11:0] rdm{k} = sdo{k}[11:0];"
+
+    def mem_inst(k):
+        if not sdp:
+            return ""
+        pad = 10 - cfg.addr_bits
+        return (f"    // hand-instantiated simple-dual-port BSRAM, 18-bit words, READ_MODE=1: the block's own\n"
+                f"    // output register carries one read stage\n"
+                f"    SDPX9B #(.READ_MODE(1'b1), .BIT_WIDTH_0(18), .BIT_WIDTH_1(18), .BLK_SEL_0(3'b000),\n"
+                f"             .BLK_SEL_1(3'b000), .RESET_MODE(\"SYNC\")) bank{k} (\n"
+                f"        .CLKA(clk), .CEA(we_b{k}), .RESETA(1'b0),\n"
+                f"        .ADA({{{pad}'d0, wa_b{k}, 4'b0011}}), .DI({{24'd0, wd_b{k}}}),\n"
+                f"        .CLKB(clk), .CEB(1'b1), .RESETB(1'b0), .OCE(1'b1),\n"
+                f"        .ADB({{{pad}'d0, ra_b{k}, 4'b0000}}), .DO(sdo{k}),\n"
+                f"        .BLKSELA(3'b000), .BLKSELB(3'b000));")
+
+    def mem_body(k):
+        if sdp:
+            return ""
+        return f"        if (we_b{k}) mem{k}[wa_b{k}] <= wd_b{k};\n        rdm{k} <= mem{k}[ra_b{k}];"
 
     def rd_chain_body(k):
         prev, out = f"rdm{k}", ""
-        for i in range(1, cfg.rd_reg + 1):
+        for i in range(1, n_rd + 1):
             out += f"\n        rd{k}_{i} <= {prev};"
             prev = f"rd{k}_{i}"
         return out
@@ -197,8 +228,7 @@ module mlkem_ntt_core (
     wire [12*{2 * L}-1:0] outs_flat;""")
     for k in range(B):
         p(f"""\
-    {ram_attr}reg [11:0] mem{k} [0:{cfg.depth - 1}];
-    reg [11:0] rdm{k} = 0;                // BSRAM read register
+{mem_decl(k)}
 {rd_chain_decl(k)}
     reg [11:0] wdr{k} = 0;                 // write-crossbar register
     wire [AW-1:0] ra{k} = wvb{k} ? {lay.wire(f'raddr{k}')} : h_addr;
@@ -209,12 +239,12 @@ module mlkem_ntt_core (
     wire          we{k}  = wvb{k} ? ctl_we{k} : (h_we & (h_bank == {k}));
     wire [AW-1:0] wa{k}  = wvb{k} ? {lay.wire(f'waddr{k}')} : h_addr;
 {bin_decl(k)}
+{mem_inst(k)}
     always @(posedge clk) begin
-        if (we_b{k}) mem{k}[wa_b{k}] <= wd_b{k};
-        rdm{k} <= mem{k}[ra_b{k}];{rd_chain_body(k)}
+{mem_body(k)}{rd_chain_body(k)}
         wdr{k} <= wdsel{k};
     end
-    assign rd_flat[{12 * k + 11}:{12 * k}] = {'rd' + str(k) + '_' + str(cfg.rd_reg) if cfg.rd_reg else 'rdm' + str(k)};""")
+    assign rd_flat[{12 * k + 11}:{12 * k}] = {rd_out(k)};""")
     p(f"    assign h_rdata = rd_flat[h_bank_q{cfg.rd_lat} * 12 +: 12];")
     p("\n    // ---------------------------------------------------------------- lanes")
     for l in range(L):

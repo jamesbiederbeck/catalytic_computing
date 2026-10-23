@@ -13,6 +13,7 @@ class NTTConfig:
     reduction: str = "montgomery"   # or "barrett"
     memory: str = "banked"          # 2*lanes single-read/single-write banks, in place
     bank_ram: str = "block"         # "block": force BSRAM for the banks; "lut": let yosys use LUT RAM
+    bank_prim: str = "infer"        # "infer" (yosys picks the BSRAM mode) or "sdp" (SDPX9B, READ_MODE=1)
     rom_ram: str = "block"          # "block" or "logic" (LUT ROM) for the control ROM
     lane: str = "deep"              # "deep" (closes timing at high clocks) or "compact" (6 stages)
     bin_reg: int = 1                # register the BSRAM address / write-enable / write-data inputs
