@@ -10,6 +10,7 @@ Options:
   --pll IDIV,FBDIV,ODIV rPLL settings (core clock = 27 MHz * (FBDIV+1)/(IDIV+1)); default: no PLL
   --freq MHZ            nextpnr timing target recorded in apio.ini
   --noalu               yosys -noalu (see the tang-nano-20k CLAUDE.md)
+  --xreg0               no read/write crossbar registers (4 clocks shorter pipeline)
   --suffix S            appended to the project name
 
 Everything in the project is generated; edit cmtz/accel/mlkem_ntt/ and regenerate.
@@ -54,10 +55,10 @@ def build(out_dir: Path, cfg: NTTConfig, suffix="", freq=None, noalu=False):
     d.mkdir(parents=True, exist_ok=True)
     core, info = rtlgen.emit_core(cfg)
     files = {
-        "mlkem_bfly.v": arith.emit_butterfly(cfg.reduction),
+        "mlkem_bfly.v": arith.emit_butterfly(cfg.reduction, cfg.lane),
         "mlkem_ntt_core.v": core,
         "mlkem_ntt_uart.v": uart_top.emit_top(cfg),
-        "mlkem_bfly_tb.v": tb_bfly.emit_bfly_tb(cfg.reduction, stride=211),
+        "mlkem_bfly_tb.v": tb_bfly.emit_bfly_tb(cfg.reduction, stride=211, depth=cfg.lane),
         "mlkem_ntt_core_tb.v": tb_core.emit_core_tb(cfg),
         "mlkem_ntt_uart_tb.v": tb_uart.emit_uart_tb(cfg),
         "pins.cst": PINS,
@@ -92,8 +93,16 @@ if __name__ == "__main__":
     ap.add_argument("--pll", default=None)
     ap.add_argument("--freq", type=float, default=None)
     ap.add_argument("--noalu", action="store_true")
+    ap.add_argument("--lane", default="deep", choices=("deep", "compact", "swap"))
+    ap.add_argument("--rd-reg", type=int, default=None)
+    ap.add_argument("--rom-reg", type=int, default=None)
+    ap.add_argument("--bin-reg", type=int, default=None)
+    ap.add_argument("--xreg0", action="store_true", help="no crossbar register stages (shorter pipeline)")
+    ap.add_argument("--rom-ram", default="block", choices=("block", "logic"))
     ap.add_argument("--suffix", default="")
     a = ap.parse_args()
     pll = tuple(int(x) for x in a.pll.split(",")) if a.pll else None
-    cfg = NTTConfig(lanes=a.lanes, reduction=a.reduction, bank_ram=a.bank_ram, pll=pll)
+    cfg = NTTConfig(lanes=a.lanes, reduction=a.reduction, bank_ram=a.bank_ram, pll=pll,
+                    xreg=0 if a.xreg0 else 1, wreg=0 if a.xreg0 else 1, lane=a.lane, rom_ram=a.rom_ram,
+                    **{k: v for k, v in (('rd_reg', a.rd_reg), ('rom_reg', a.rom_reg), ('bin_reg', a.bin_reg)) if v is not None})
     print(build(a.out_dir, cfg, a.suffix, a.freq, a.noalu))

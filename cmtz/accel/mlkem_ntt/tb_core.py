@@ -30,7 +30,7 @@ def emit_core_tb(cfg, n_random=6):
 `timescale 1ns/1ps
 module mlkem_ntt_core_tb;
     localparam NV = {nv}, L = {L}, B = {B}, BB = {BB};
-    localparam EXP_F = {len(wf) + 2}, EXP_I = {len(wi) + 2};
+    localparam EXP_F = {len(wf) + cfg.overhead}, EXP_I = {len(wi) + cfg.overhead};
     reg clk = 0, rst = 1;
     always #5 clk = ~clk;
     reg start = 0, inv = 0, h_we = 0;
@@ -79,7 +79,8 @@ module mlkem_ntt_core_tb;
     task expect_mem(input integer which, input integer v, input [8*12-1:0] tag);
         begin
             for (i = 0; i < 256; i = i + 1) begin
-                h_idx <= i; tick;                // h_rdata is valid one clock after h_idx
+                h_idx <= i; tick;                // h_rdata is valid RD_LAT clocks after h_idx
+{'                tick;' * (cfg.rd_lat - 1)}
                 got = h_rdata;
                 checks = checks + 1;
                 if (which == 0 && got !== vfw[v * 256 + i] ||
@@ -161,7 +162,7 @@ def _monitor(cfg):
     exp = []
     for l in range(L):
         ws = (lambda k: f"wsel_q[{k}]") if cfg.wreg else (lambda k: f"dut.wsel{k}")
-        terms = [f"(dut.ctl_we{k} && ({ws(k)} >> 1) == {l})" for k in range(B)]
+        terms = [f"(dut.wvb{k} && dut.ctl_we{k} && ({ws(k)} >> 1) == {l})" for k in range(B)]
         exp.append(f"        exp_v[{l}] = " + " || ".join(terms) + ";")
     cmp_vo = "vo_q" if cfg.wreg else "vo_now"
     return f"""\

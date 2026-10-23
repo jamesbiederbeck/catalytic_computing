@@ -33,7 +33,18 @@ Pipeline (register stages; ``LAT`` clocks from inputs presented to outputs regis
 """
 
 Q = 3329
-LAT = 6
+LAT = 6                # register stages of the compact lane (depth="compact")
+
+
+def latency(reduction, depth="deep"):
+    """Register stages of a lane.  The deep lane has at most one carry chain (plus a mux)
+    per stage and no multiplier except the one DSP product; it is what closes timing on
+    the board at high clocks.  The compact lane is the 6-stage original, kept for study."""
+    if depth == "compact":
+        return 6
+    if depth == "swap":
+        return latency(reduction)
+    return {"montgomery": 12, "barrett": 11}[reduction]
 R_MONT = 1 << 16
 NQINV = 3327            # -q^-1 mod 2^16
 BARRETT_SHIFT = 7
@@ -88,8 +99,14 @@ def twiddle_encode(reduction, zeta, inverse):
     return z % Q
 
 
-def emit_butterfly(reduction):
+def emit_butterfly(reduction, depth="deep"):
     """Verilog for the ``mlkem_bfly`` lane module."""
+    if depth == "swap":
+        return _emit_swap(reduction)
+    return _emit_compact(reduction) if depth == "compact" else _emit_deep(reduction)
+
+
+def _emit_compact(reduction):
     if reduction == "montgomery":
         r3_decl = """\
     reg  [15:0] red3;
@@ -193,5 +210,174 @@ module mlkem_bfly (
     end
     assign o0 = o0_r;
     assign o1 = o1_r;
+endmodule
+"""
+
+
+def _emit_deep(reduction):
+    """Deep lane, generated stage by stage.
+
+    The p path (multiplicand -> product -> reduction) and the c path (the value the
+    product is added to or subtracted from) are separate register chains of the same
+    length.  The c path has slack, so its work is spread thinly; the p path is ordered so
+    that no stage holds more than one carry chain plus a mux, and the only multiplier is
+    the 12x12 product.  Stage k's registers are named *k; logic that feeds stage k+1
+    reads mode as m_pipe[k].
+    """
+    mont = reduction == "montgomery"
+    lat = latency(reduction)
+    st = []                                   # (title, declarations, always-body)
+
+    def stage(title, decl, body):
+        st.append((title, decl, body))
+
+    # ---- front end: both paths together ----
+    stage("b - a and a + b",
+          "reg [12:0] t1, s1; reg [11:0] a1, b1, z1;",
+          "t1 <= {1'b0, b} - {1'b0, a};\n        s1 <= {1'b0, a} + {1'b0, b};\n        a1 <= a; b1 <= b; z1 <= z;")
+    stage("(b - a) + q and (a + b) - q",
+          "reg [12:0] t2, tq2, s2, sq2; reg [11:0] a2, b2, z2;",
+          "t2 <= t1; tq2 <= t1 + Q; s2 <= s1; sq2 <= s1 - Q;\n        a2 <= a1; b2 <= b1; z2 <= z1;")
+    stage("select multiplicand and (a + b) mod q",
+          "reg [11:0] x3, z3; reg [12:0] c3;",
+          "x3 <= m_pipe[2] ? (t2[12] ? tq2[11:0] : t2[11:0]) : b2;\n"
+          "        z3 <= z2;\n"
+          "        c3 <= m_pipe[2] ? (sq2[12] ? s2 : sq2) : {1'b0, a2};")
+    stage("DSP product; c + q",
+          "reg [23:0] p4; reg [12:0] c4, hq4;",
+          "p4 <= x3 * z3;\n        c4 <= c3; hq4 <= c3 + Q;")
+    stage("halve (inverse): (a + b)/2",
+          "reg [23:0] p5; reg [12:0] c5;",
+          "p5 <= p4;\n        c5 <= m_pipe[4] ? (c4[0] ? hq4[12:1] : {1'b0, c4[12:1]}) : c4;")
+    n = 5
+
+    def delay_c(k):
+        return f"reg [12:0] c{k};", f"c{k} <= c{k - 1};"
+
+    if mont:
+        stage("m = p * 3327 mod 2^16, step 1  (3327 = 2^11 + 2^10 + 2^8 - 1)",
+              "reg [15:0] ms6, mt6; reg [23:0] p6; reg [12:0] c6;",
+              "ms6 <= (p5[15:0] << 11) + (p5[15:0] << 10);\n        mt6 <= (p5[15:0] << 8) - p5[15:0];\n        p6 <= p5; c6 <= c5;")
+        stage("m",
+              "reg [15:0] m7; reg [23:0] p7; reg [12:0] c7;",
+              "m7 <= ms6 + mt6; p7 <= p6; c7 <= c6;")
+        stage("m*q partial sums (q = 2^11 + 2^10 + 2^8 + 1)",
+              "reg [27:0] qa8; reg [24:0] qb8; reg [23:0] p8; reg [12:0] c8;",
+              "qa8 <= ({12'd0, m7} << 11) + ({12'd0, m7} << 10);\n        qb8 <= ({9'd0, m7} << 8) + {9'd0, m7};\n        p8 <= p7; c8 <= c7;")
+        stage("p + m*q, first half",
+              "reg [27:0] ps9; reg [24:0] qb9; reg [12:0] c9;",
+              "ps9 <= {4'd0, p8} + qa8; qb9 <= qb8; c9 <= c8;")
+        stage("(p + m*q) >> 16, in [0, 2q)",
+              "reg [12:0] u10, c10; wire [27:0] sum10 = ps9 + {3'd0, qb9};",
+              "u10 <= sum10[27:16]; c10 <= c9;")
+        n = 10
+        u = "u10"
+    else:
+        stage("quotient estimate e = ((p >> 7) * 80635) >> 21",
+              "wire [33:0] e_full = p5[23:7] * 17'd80635; reg [12:0] e6; reg [23:0] p6; reg [12:0] c6;",
+              "e6 <= e_full[33:21]; p6 <= p5; c6 <= c5;")
+        stage("e*q partial sums",
+              "reg [23:0] ea7; reg [21:0] eb7; reg [23:0] p7; reg [12:0] c7;",
+              "ea7 <= ({11'd0, e6} << 11) + ({11'd0, e6} << 10);\n        eb7 <= ({9'd0, e6} << 8) + {9'd0, e6};\n        p7 <= p6; c7 <= c6;")
+        stage("p - e*(2^11 + 2^10)",
+              "reg [23:0] r8; reg [21:0] eb8; reg [12:0] c8;",
+              "r8 <= p7 - ea7; eb8 <= eb7; c8 <= c7;")
+        stage("remainder in [0, 2q)",
+              "reg [12:0] u9, c9; wire [23:0] r9 = r8 - {2'd0, eb8};",
+              "u9 <= r9[12:0]; c9 <= c8;")
+        n = 9
+        u = "u9"
+    # canonicalise: t = u mod q and tm = t - q, from two parallel chains
+    k = n + 1
+    stage("canonicalise: t = u mod q, tm = t - q",
+          f"reg [12:0] t{k}, tm{k}, c{k}; wire [12:0] d1_{k} = {u} - Q; wire [12:0] d2_{k} = {u} - 2 * Q;",
+          f"t{k} <= d1_{k}[12] ? {u} : d1_{k};\n        tm{k} <= d1_{k}[12] ? d1_{k} : d2_{k};\n        c{k} <= c{n};")
+    assert k + 1 == lat, (k, lat)
+    body = []
+    for i, (title, decl, code) in enumerate(st, 1):
+        body.append(f"    // ---- R{i}: {title} ----\n    {decl}\n    always @(posedge clk) begin\n        {code}\n    end\n")
+    kk = k
+    return f"""\
+// GENERATED by cmtz.accel.mlkem_ntt.arith -- do not edit.  reduction = {reduction}, deep lane
+// ML-KEM (q = 3329) butterfly lane, {lat} register stages, one DSP product per lane.
+//   mode 0 forward (CT):  o0 = a + b*z,  o1 = a - b*z
+//   mode 1 inverse (GS):  o0 = (a + b)/2, o1 = (b - a)*z/2
+// Latency: v_out/o0/o1 appear LAT = {lat} clocks after v_in/mode/a/b/z.  All inputs must be
+// canonical (< 3329); z comes from the twiddle table (see arith.twiddle_encode).
+// Every stage holds at most one carry chain plus a mux; the only multiplier is the single
+// 12x12 product (R4).
+module mlkem_bfly (
+    input  wire        clk,
+    input  wire        rst,
+    input  wire        v_in,
+    input  wire        mode,
+    input  wire [11:0] a,
+    input  wire [11:0] b,
+    input  wire [11:0] z,
+    output wire        v_out,
+    output wire [11:0] o0,
+    output wire [11:0] o1
+);
+    localparam [12:0] Q = 13'd3329;
+
+    // valid / mode alignment: one bit per stage, cleared by rst
+    reg [{lat}:1] v_pipe = 0;
+    reg [{lat}:1] m_pipe = 0;
+    always @(posedge clk) begin
+        if (rst) v_pipe <= 0;
+        else     v_pipe <= {{v_pipe[{lat - 1}:1], v_in}};
+        m_pipe <= {{m_pipe[{lat - 1}:1], mode}};
+    end
+    assign v_out = v_pipe[{lat}];
+
+{chr(10).join(body)}
+    // ---- R{lat}: output stage, both candidates, select on the sign ----
+    reg [11:0] o0_r, o1_r;
+    wire [12:0] s0 = c{kk} + t{kk};
+    wire [12:0] s1o = c{kk} + tm{kk};                  // c + t - q
+    wire [12:0] e1 = c{kk} - t{kk};
+    wire [12:0] e2 = c{kk} - tm{kk};                   // c - t + q
+    always @(posedge clk) begin
+        o0_r <= m_pipe[{lat - 1}] ? c{kk}[11:0] : (s1o[12] ? s0[11:0] : s1o[11:0]);
+        o1_r <= m_pipe[{lat - 1}] ? t{kk}[11:0] : (e1[12] ? e2[11:0] : e1[11:0]);
+    end
+    assign o0 = o0_r;
+    assign o1 = o1_r;
+endmodule
+"""
+
+
+def _emit_swap(reduction):
+    """Diagnostic lane: o0 = b, o1 = a after the deep lane's latency, no arithmetic and no
+    DSP.  Used to separate memory / crossbar / control timing from arithmetic timing on the
+    board; the expected result of a transform comes from the cycle model."""
+    lat = latency(reduction)
+    return f"""\
+// GENERATED diagnostic lane (swap): o0 = b, o1 = a, {lat} register stages.  Not an NTT lane.
+module mlkem_bfly (
+    input  wire        clk,
+    input  wire        rst,
+    input  wire        v_in,
+    input  wire        mode,
+    input  wire [11:0] a,
+    input  wire [11:0] b,
+    input  wire [11:0] z,
+    output wire        v_out,
+    output wire [11:0] o0,
+    output wire [11:0] o1
+);
+    reg [{lat}:1] v_pipe = 0;
+    reg [11:0] pa [1:{lat}];
+    reg [11:0] pb [1:{lat}];
+    integer i;
+    always @(posedge clk) begin
+        if (rst) v_pipe <= 0;
+        else     v_pipe <= {{v_pipe[{lat - 1}:1], v_in}};
+        pa[1] <= a; pb[1] <= b;
+        for (i = 2; i <= {lat}; i = i + 1) begin pa[i] <= pa[i-1]; pb[i] <= pb[i-1]; end
+    end
+    assign v_out = v_pipe[{lat}];
+    assign o0 = pb[{lat}];
+    assign o1 = pa[{lat}];
 endmodule
 """

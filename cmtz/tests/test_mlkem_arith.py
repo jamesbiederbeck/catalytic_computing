@@ -64,9 +64,9 @@ class TestButterflyModel:
             assert arith.bfly_model(reduction, 1, a, b, z) == (exp0, exp1)
 
 
-def _sim(reduction, tmp_path, stride):
-    (tmp_path / "bfly.v").write_text(arith.emit_butterfly(reduction))
-    (tmp_path / "bfly_tb.v").write_text(emit_bfly_tb(reduction))
+def _sim(reduction, tmp_path, stride, depth="deep"):
+    (tmp_path / "bfly.v").write_text(arith.emit_butterfly(reduction, depth))
+    (tmp_path / "bfly_tb.v").write_text(emit_bfly_tb(reduction, depth=depth))
     subprocess.run(["iverilog", "-g2012", f"-DSTRIDE={stride}", "-o", "s.out", "bfly.v",
                     "bfly_tb.v"], cwd=tmp_path, check=True, capture_output=True)
     return subprocess.run(["vvp", "s.out"], cwd=tmp_path, check=True, capture_output=True,
@@ -75,13 +75,15 @@ def _sim(reduction, tmp_path, stride):
 
 @pytest.mark.skipif(not IVERILOG, reason="iverilog/vvp not installed")
 class TestButterflySimulation:
+    @pytest.mark.parametrize("depth", ["deep", "compact"])
     @pytest.mark.parametrize("reduction", ["montgomery", "barrett"])
-    def test_sampled_sweep(self, reduction, tmp_path):
-        out = _sim(reduction, tmp_path, 211)
+    def test_sampled_sweep(self, reduction, depth, tmp_path):
+        out = _sim(reduction, tmp_path, 211, depth)
         assert f"PASS mlkem_bfly {reduction}" in out, out
 
     def test_testbench_detects_a_broken_design(self, tmp_path):
-        src = arith.emit_butterfly("montgomery").replace("16'd3327", "16'd3326")
+        src = arith.emit_butterfly("montgomery").replace("(p5[15:0] << 8) - p5[15:0]",
+                                                         "(p5[15:0] << 8) - p5[15:0] - 1")
         (tmp_path / "bfly.v").write_text(src)
         (tmp_path / "bfly_tb.v").write_text(emit_bfly_tb("montgomery"))
         subprocess.run(["iverilog", "-g2012", "-DSTRIDE=211", "-o", "s.out", "bfly.v",

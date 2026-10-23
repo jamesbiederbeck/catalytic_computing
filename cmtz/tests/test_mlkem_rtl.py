@@ -50,7 +50,7 @@ class TestCoreSimulation:
 
     def test_bench_detects_early_write_register(self, tmp_path):
         cfg = NTTConfig(lanes=4)
-        core = rtlgen.emit_core(cfg)[0].replace("wv ? wdr0 :", "wv ? wdsel0 :")
+        core = rtlgen.emit_core(cfg)[0].replace("wvb0 ? wdr0 :", "wvb0 ? wdsel0 :")
         out = sim(tmp_path, {"b.v": arith.emit_butterfly("montgomery"), "c.v": core,
                              "t.v": tb_core.emit_core_tb(cfg)}, ["b.v", "c.v", "t.v"])
         assert "FAIL" in out and "PASS" not in out

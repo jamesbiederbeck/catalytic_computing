@@ -120,7 +120,7 @@ module mlkem_ntt_uart #(
     reg [8:0] idx = 0;
     reg [7:0] lo = 0;
     reg [23:0] total = 0;
-    reg [1:0] wait_c = 0;
+    reg [2:0] wait_c = 0;
 
     task send1(input [7:0] a);
         begin sendbuf[0] <= a; sn <= 1; si <= 0; ret <= S_IDLE; st <= S_SEND; end
@@ -157,7 +157,7 @@ module mlkem_ntt_uart #(
             // ---- read 256 x 2 bytes ----
             S_R_WAIT: begin
                 wait_c <= wait_c + 1'b1;
-                if (wait_c == 2'd1) begin
+                if (wait_c == 3'd{cfg.rd_lat}) begin
                     sendbuf[0] <= h_rdata[7:0]; sendbuf[1] <= {{4'd0, h_rdata[11:8]}};
                     sn <= 2; si <= 0; ret <= S_R_SEND; st <= S_SEND;
                 end
